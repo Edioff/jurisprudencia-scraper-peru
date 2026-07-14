@@ -4,11 +4,12 @@
 
 import { SiteAdapter } from './adapter';
 import { OefaAdapter } from './oefa';
+import { PjAdapter } from './pj';
 
 const ADAPTERS: SiteAdapter[] = [
   new OefaAdapter(),
-  // PJ (jurisprudencia.pj.gob.pe) adapter lands here — the site is only
-  // reachable from Peruvian IPs, so it is developed/verified behind a VPN.
+  // PJ is only reachable from Peruvian IPs (403 elsewhere); run behind a VPN.
+  new PjAdapter(),
 ];
 
 export function getAdapter(name: string): SiteAdapter {

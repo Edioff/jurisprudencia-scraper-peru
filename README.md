@@ -8,10 +8,15 @@ It walks the complete result set, extracts every document's metadata, downloads
 each associated PDF with a descriptive file name, and survives rate limiting
 (HTTP 429), transient failures, session expiry and interruptions.
 
-| Site | Adapter | Status |
-| --- | --- | --- |
-| `publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml` | `oefa` | ✅ Working (1,753 documents / 176 pages) |
-| `jurisprudencia.pj.gob.pe/jurisprudenciaweb/faces/page/resultado.xhtml` | `pj` | 🔜 The site is geo-blocked outside Peru (HTTP 403); the adapter plugs into the same core (see [Adding a site](#adding-a-site)) |
+| Site | Adapter | Stack | Status |
+| --- | --- | --- | --- |
+| `jurisprudencia.pj.gob.pe/jurisprudenciaweb/faces/page/resultado.xhtml` | `pj` | JSF + **RichFaces 4.2.2** | ✅ Working (208,341 documents / 20,835 pages). Geo-blocked outside Peru — run behind a Peru VPN. |
+| `publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml` | `oefa` | JSF + **PrimeFaces 6.0** | ✅ Working (1,753 documents / 176 pages). Reachable anywhere — the challenge's no-VPN alternative. |
+
+`pj` is the challenge's primary target; `oefa` is the sanctioned no-VPN
+alternative. They run on **different JSF component frameworks** and interact
+with their servers quite differently (see [How the sites work](#how-the-sites-work)),
+yet share one core — which is the point of the adapter split.
 
 ---
 
@@ -20,18 +25,24 @@ each associated PDF with a descriptive file name, and survives rate limiting
 ```bash
 npm install
 
-# Smoke test: first 2 pages, max 5 PDFs
-npm run scrape -- --max-pages 2 --max-docs 5
+# Smoke test against PJ (needs a Peru VPN): first 2 pages, max 5 PDFs
+npm run scrape -- --site pj --max-pages 2 --max-docs 5
 
-# Full scrape (all pages, all PDFs — resumable, safe to interrupt)
-npm run scrape
+# Full PJ scrape (all pages, all PDFs — resumable, safe to interrupt)
+npm run scrape -- --site pj
+
+# Same against OEFA (no VPN needed) — handy for development
+npm run scrape -- --site oefa --max-pages 2 --max-docs 5
 
 # Re-attempt any downloads that exhausted their retries
-npm run retry-failed
+npm run retry-failed -- --site pj
 
 # Metadata only, no PDFs
-npm run scrape -- --skip-pdfs
+npm run scrape -- --site pj --skip-pdfs
 ```
+
+The default site is `oefa` (so `npm run scrape` works with no VPN); pass
+`--site pj` for the primary target.
 
 All flags:
 
@@ -46,9 +57,10 @@ All flags:
 --verbose        Debug logging
 ```
 
-The full OEFA run is ~1,940 HTTP requests. With the default 600 ms politeness
-delay plus download time it takes a few hours; it does **not** need to finish in
-one sitting — interrupt it (Ctrl+C) at any point and re-run to resume.
+Neither full run needs to finish in one sitting — interrupt it (Ctrl+C) at any
+point and re-run to resume. PJ is a large corpus (208k documents); the point of
+resume + `retry-failed` is exactly that you don't have to download it all at
+once, and the challenge only asks the scraper to *demonstrate* it can.
 
 ### Output layout
 
@@ -57,50 +69,68 @@ output/
 ├── documents.json   # every extracted document (all table columns + uuid + local pdf name)
 ├── documents.csv    # same data as CSV
 ├── state.json       # resume/retry bookkeeping (completed pages, downloaded uuids, failed downloads)
-└── pdfs/            # e.g. "264-2012-OEFA-TFA__RTFA N° 264-2012.pdf"
+└── pdfs/            # PJ: "Casación-001785-2024__Resolucion_10_....pdf"; OEFA: "264-2012-OEFA-TFA__RTFA N° 264-2012.pdf"
 ```
 
 ---
 
-## How the site works (discovery notes)
+## How the sites work
 
-The challenge asks you to discover the site's structure; this is what reverse
-engineering it revealed, and what the scraper replicates:
+The challenge asks you to discover each site's structure. Both are **JSF
+(Mojarra)** with no REST API and no stable URLs — every interaction is a POST
+against an `.xhtml` page carrying a `JSESSIONID` cookie and a
+`javax.faces.ViewState` token. But they run different component frameworks on
+top of JSF, and the mechanics diverge enough that they are genuinely two
+protocols. This is the interesting part of the challenge, so it's worth
+spelling out.
 
-**Stack:** JSF (Mojarra) + PrimeFaces 6.0 with *client-side state saving*.
-There is no REST API and no stable URLs — every interaction is a POST against
-the same `.xhtml` page, driven by two tokens:
+### PJ — RichFaces 4.2.2 (the primary target)
 
-1. **`JSESSIONID`** — ordinary session cookie, set on the first GET.
-2. **`javax.faces.ViewState`** — an encrypted ~1.5 KB blob embedded in a hidden
-   input. It encodes the entire server-side component tree state. Every AJAX
-   response returns a **new** ViewState that must replace the previous one;
-   sending a stale or foreign token makes the server silently ignore your
-   action and re-render the page.
+ViewState here is a short server-side handle (`123:456`), not an encrypted
+tree. The flow is classic, **non-AJAX** JSF:
 
-**Search.** The results table is exposed by submitting the filter form empty
-(PrimeFaces AJAX POST, `javax.faces.source = ...btnBuscar`). The response is a
-`<partial-response>` XML document whose `<update>` nodes carry HTML fragments
-inside CDATA — including the paginator, which reports the total
-(`Página 1 de 176 (1753 registros)`).
+- **Search.** GET `inicio.xhtml` for the ViewState and the full search form.
+  Then a **full form POST** — the entire form resubmitted, plus the
+  "general search" button's params. The server answers `302 → resultado.xhtml`.
+  Gotcha: the site sits behind a TLS-terminating proxy that emits `http://`
+  Location headers after an `https://` request; the HTTP client upgrades the
+  scheme back (`http-client.ts`), otherwise the redirect breaks.
+- **Count + pagination.** The results page reports the total in prose
+  ("se obtuvieron 208341 resultados") and renders 10 items per page. Paging is
+  another full form POST that drives the RichFaces page-number spinner
+  (`formBuscador:spinner`) + its "IR" button to jump to any 1-based page.
+- **Metadata.** Each result is a `formBuscador:repeat:N:...` block whose
+  download link's `onclick` embeds a JS object with **every** field we want
+  (uuid, expediente, recurso, sala, fecha, sumilla…). We read metadata straight
+  from that object rather than scraping the formatted panel — more robust, and
+  `N` is the row's absolute index across the whole result set. The object is
+  doubly escaped in the markup (`&quot;` entities *and* `\"`), with `-`
+  for dashes; `parseResults` collapses all of it.
+- **PDF download.** A plain `GET /jurisprudenciaweb/ServletDescarga?uuid=<uuid>`
+  streams the PDF (`Content-Disposition: attachment`). No arming, no ViewState.
+- **Flakiness.** The PJ server returns intermittent `500`/`503`s on
+  navigation. A same-ViewState retry can't recover those, so search/pagination
+  re-initialize the session (fresh ViewState) between attempts (`withReinit`).
 
-**Pagination.** Another AJAX POST (`...dt_pagination=true`,
-`...dt_first=<absolute row offset>`). The fragment returned is a bare `<tr>`
-list (no surrounding table — spec-compliant HTML parsers drop orphan rows, a
-real trap; see `parseRows`). Direct jumps to any offset work, which is what
-makes resuming cheap.
+### OEFA — PrimeFaces 6.0 (the no-VPN alternative)
 
-**PDF download.** Each row's link runs
-`mojarra.jsfcljs(form, {'form:dt:<n>:j_idt63': ..., 'param_uuid': '<uuid>'})` —
-a **full form POST** (not AJAX) answered with the raw PDF bytes and a
-`Content-Disposition: attachment` file name. Two hard-won rules:
+Here ViewState is an encrypted ~1.5 KB blob, and interactions are **AJAX**:
 
-- A row can only be "clicked" while its page is the one rendered in the current
-  ViewState. Ask for a row the view doesn't have and the server returns a
-  normal HTML page instead of a PDF — silently. The scraper treats any non-PDF
-  answer as view loss and recovers (re-init → re-search → re-paginate → retry).
-- Download responses do **not** rotate the ViewState, so the last one received
-  keeps working for the following downloads and pagination calls.
+- **Search.** A PrimeFaces AJAX POST (`javax.faces.source = ...btnBuscar`) with
+  every filter empty. The response is a `<partial-response>` XML whose
+  `<update>` nodes carry HTML fragments inside CDATA — including the paginator
+  (`Página 1 de 176 (1753 registros)`). Each response returns a **new**
+  ViewState that must replace the current one.
+- **Pagination.** Another AJAX POST (`dt_pagination=true`,
+  `dt_first=<row offset>`). The fragment is a bare `<tr>` list with no parent
+  table — spec-compliant HTML parsers drop orphan rows, a real trap, so
+  `parseRows` wraps them first. Direct offset jumps work, making resume cheap.
+- **PDF download.** A full form POST emulating the row link
+  `mojarra.jsfcljs(form, {'form:dt:<n>:j_idt63': …, 'param_uuid': '<uuid>'})`,
+  answered with the PDF bytes. A row is only "clickable" while its page is the
+  one currently rendered; ask for one the view doesn't have and the server
+  silently re-renders the page as HTML instead — which the scraper treats as
+  view loss and recovers from.
 
 ---
 
@@ -113,51 +143,59 @@ src/
 ├── state.ts            # persistent state: completed pages, downloaded uuids, failed list
 ├── types.ts            # shared domain types
 ├── core/               # site-agnostic machinery
-│   ├── http-client.ts  # axios wrapper: cookies, politeness delay, manual redirects
-│   ├── jsf-session.ts  # ViewState chaining + <partial-response> parsing
-│   ├── retry.ts        # exponential backoff + jitter, Retry-After, 429 classification
+│   ├── http-client.ts  # axios wrapper: cookies, politeness delay, manual redirects (+http→https upgrade)
+│   ├── jsf-session.ts  # ViewState chaining, <partial-response> parsing, full-page POSTs, resource GETs
+│   ├── retry.ts        # exponential backoff + jitter, Retry-After, 429/5xx classification
 │   ├── cookie-jar.ts   # minimal session-cookie jar
 │   ├── files.ts        # safe file names, atomic JSON writes, CSV export
 │   └── logger.ts       # leveled, timestamped logging
 └── sites/
     ├── adapter.ts      # SiteAdapter contract
-    ├── oefa.ts         # OEFA: form ids, columns, download parameters
+    ├── oefa.ts         # OEFA (PrimeFaces): AJAX search/pagination, form-POST download
+    ├── pj.ts           # PJ (RichFaces): full-form search/pagination, servlet GET download
     └── index.ts        # registry
 ```
 
-The split follows how these government sites are built: the **JSF mechanics
-are identical across them** (ViewState chaining, partial responses, paginated
-DataTable, file-stream POSTs) while form ids, columns and download parameters
-differ. The core owns the former; a ~150-line adapter owns the latter.
+The core owns everything site-independent — the session + ViewState lifecycle,
+retry/backoff, the pagination loop, resume, and the record-and-continue
+download policy. Each adapter owns only what differs: how to run the search,
+how to page, how a row maps to metadata, and how to fetch its PDF. That the two
+adapters target **different JSF frameworks** (PrimeFaces vs RichFaces) with
+different transports — AJAX partial-responses vs full-page POSTs, a form-POST
+download vs a resource GET — is the real test of that boundary, and it holds:
+neither adapter needed a change to the core's contract beyond the download
+method returning bytes.
 
 ### Error handling
 
-Two failure domains, handled separately:
+Several failure domains, handled separately:
 
 | Failure | Detection | Response |
 | --- | --- | --- |
-| **HTTP 429** | status code | Honors `Retry-After` when sent (RFC 9110 — parsed for 503 as well); otherwise exponential backoff `1s → 2s → 4s → 8s → 16s` (±20 % jitter, capped 60 s). After 5 attempts the document is recorded in `state.json` and the scraper moves on. `npm run retry-failed` reprocesses the list. |
-| Transient 5xx / network errors | status / no response | Same backoff policy. Applies to **every** request: navigation (init, search, pagination) is retried inside the JSF session layer, downloads by the orchestrator, which owns the record-and-continue policy. |
-| **Session / view expiry** | `<partial-response>` error node, redirect, or HTML where a PDF was expected | Re-initialize the session, re-run the search, re-paginate to the current page, retry once. |
+| **HTTP 429** | status code | Honors `Retry-After` when sent (RFC 9110 — parsed for 503 too); otherwise exponential backoff `1s → 2s → 4s → 8s → 16s` (±20 % jitter, capped 60 s). After 5 attempts the document is recorded in `state.json` and the scraper moves on. `retry-failed` reprocesses the list. |
+| Transient 5xx / network errors | status / no response | Same backoff policy, on **every** request: navigation (init, search, pagination) is retried inside the JSF session layer, downloads by the orchestrator. |
+| **Flaky-server 500s (PJ)** | status after backoff | RichFaces navigation 500s that a same-ViewState retry can't fix trigger a session re-init (fresh ViewState) and retry — `withReinit` in `pj.ts`. |
+| **Session / view expiry** | partial-response error/redirect, or HTML where a PDF was expected | Re-initialize the session, re-run the search, re-paginate to the current page, retry once. |
 | Interruption (Ctrl+C) | SIGINT | Finishes the in-flight document, persists state, exits. Re-running resumes: completed pages are skipped and already-downloaded uuids are never re-fetched. |
 
 State writes are atomic (write-to-temp + rename), so a crash can't corrupt the
-resume data. Every payload is validated before being trusted: PDFs must start
-with `%PDF-`, partial responses must contain the expected update nodes.
+resume data. Every payload is validated before being trusted: downloaded files
+must start with `%PDF-`, partial responses must contain the expected nodes.
 
 ### Politeness
 
 Requests are globally spaced by a configurable delay (600 ms default) — the
-scraper never issues concurrent requests against the site. Downloads are
+scraper never issues concurrent requests against a site. Downloads are
 sequential by design: these are shared government servers and the challenge
 explicitly rewards not hammering them.
 
 ## Adding a site
 
-Implement `SiteAdapter` (`src/sites/adapter.ts`) — form/component ids, column
-names, download parameters — and register it in `src/sites/index.ts`. The JSF
-core (session, ViewState, retries, resume) is reused as-is. `oefa.ts` is the
-reference implementation.
+Implement `SiteAdapter` (`src/sites/adapter.ts`) — `search`, `fetchPage`,
+`downloadPdf`, `pdfFileName` — and register it in `src/sites/index.ts`. The
+core (session, ViewState, retries, resume, orchestration) is reused as-is.
+`oefa.ts` (PrimeFaces/AJAX) and `pj.ts` (RichFaces/full-form) are the two
+reference implementations — pick whichever is closer to your target.
 
 ## Tests
 
@@ -165,11 +203,17 @@ reference implementation.
 npm test
 ```
 
-Unit tests (Node's built-in runner, no extra dependencies) cover the pure
-logic against fixtures captured from the live site: partial-response parsing
-(including JSF's split-CDATA escaping of literal `]]>`), row extraction from
-both fragment shapes, 429/backoff/Retry-After semantics, retry exhaustion,
-cookie handling, CSV escaping and file-name sanitization.
+24 unit tests (Node's built-in runner, no extra dependencies) cover the pure
+logic against fixtures captured from **both** live sites:
+
+- **OEFA:** partial-response parsing (including JSF's split-CDATA escaping of
+  literal `]]>`), row extraction from both fragment shapes.
+- **PJ:** metadata + uuid extraction from the doubly-escaped RichFaces download
+  link, the absolute `repeat:N` row index, form-field harvesting, and picking
+  the general-search button over the specialized one.
+- **Shared:** 429/backoff/Retry-After semantics (incl. 503), retry exhaustion
+  with accurate attempt counts, cookie handling, CSV escaping, Content-Disposition
+  and file-name sanitization.
 
 ## Requirements
 

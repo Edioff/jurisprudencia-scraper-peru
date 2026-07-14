@@ -34,12 +34,14 @@ export class HttpClient {
   private readonly axios: AxiosInstance;
   readonly jar = new CookieJar();
   private lastRequestAt = 0;
+  private readonly secure: boolean;
 
   constructor(
     baseUrl: string,
     /** Minimum spacing between requests, in ms. */
     private readonly delayMs: number,
   ) {
+    this.secure = baseUrl.startsWith('https://');
     this.axios = axios.create({
       baseURL: baseUrl,
       timeout: 30_000,
@@ -78,12 +80,20 @@ export class HttpClient {
       this.jar.store(res.headers['set-cookie']);
 
       if (res.status >= 300 && res.status < 400 && res.headers.location) {
-        log.debug(`HTTP ${res.status} -> following redirect to ${res.headers.location}`);
+        // Some of these sites sit behind a TLS-terminating proxy and emit
+        // `http://` Location headers after an `https://` request. Following
+        // them verbatim would downgrade (and often get blocked), so upgrade
+        // the scheme back to match the request we made.
+        let location = res.headers.location as string;
+        if (this.secure && location.startsWith('http://')) {
+          location = 'https://' + location.slice('http://'.length);
+        }
+        log.debug(`HTTP ${res.status} -> following redirect to ${location}`);
         // Redirects after a POST are followed as GET, per browser behavior;
         // entity headers describing the POST body must not carry over.
         current = {
           method: 'GET',
-          url: res.headers.location,
+          url: location,
           headers: withoutEntityHeaders(config.headers as Record<string, string> | undefined),
           responseType: 'arraybuffer',
           timeout: current.timeout,
@@ -106,8 +116,8 @@ export class HttpClient {
     throw new Error(`Too many redirects (> ${MAX_REDIRECTS}) for ${config.url}`);
   }
 
-  async get(url: string): Promise<AxiosResponse<Buffer>> {
-    return this.request({ method: 'GET', url });
+  async get(url: string, timeoutMs = 30_000): Promise<AxiosResponse<Buffer>> {
+    return this.request({ method: 'GET', url, timeout: timeoutMs });
   }
 
   /**

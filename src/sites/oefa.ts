@@ -17,8 +17,8 @@
 import * as cheerio from 'cheerio';
 import { JsfSession } from '../core/jsf-session';
 import { DocumentRecord } from '../types';
-import { SearchResult, SiteAdapter } from './adapter';
-import { sanitizeFileName } from '../core/files';
+import { PdfDownload, SearchResult, SiteAdapter } from './adapter';
+import { fileNameFromDisposition, sanitizeFileName } from '../core/files';
 
 const FORM = 'listarDetalleInfraccionRAAForm';
 const TABLE = `${FORM}:dt`;
@@ -144,15 +144,24 @@ export class OefaAdapter implements SiteAdapter {
     return rows;
   }
 
-  buildDownloadFields(row: DocumentRecord): Record<string, string> {
+  /**
+   * Download emulates the row's link — a full form POST carrying the row's
+   * button id + `param_uuid`, answered with the PDF stream. Only valid while
+   * the row's page is the one currently rendered in the view state.
+   */
+  async downloadPdf(session: JsfSession, row: DocumentRecord): Promise<PdfDownload> {
     if (!row.downloadButtonId || !row.uuid) {
       throw new Error(`Row ${row.rowIndex} has no download link`);
     }
-    return {
+    const res = await session.postDownload({
       [FORM]: FORM,
       ...FILTER_FIELDS,
       [row.downloadButtonId]: row.downloadButtonId,
       param_uuid: row.uuid,
+    });
+    return {
+      bytes: res.data,
+      serverFileName: fileNameFromDisposition(res.headers['content-disposition']),
     };
   }
 

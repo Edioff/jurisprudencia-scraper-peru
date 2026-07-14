@@ -27,3 +27,38 @@ export const PARTIAL_RESPONSE_ERROR = `<?xml version='1.0' encoding='UTF-8'?>
 
 export const PARTIAL_RESPONSE_REDIRECT = `<?xml version='1.0' encoding='UTF-8'?>
 <partial-response id="j_id1"><redirect url="/repdig/sesionExpirada.xhtml"></redirect></partial-response>`;
+
+// ---------------------------------------------------------------------------
+// PJ (RichFaces) fixtures — captured verbatim from the live site.
+
+/**
+ * One result's download link, exactly as served: the RichFaces.ajax params
+ * object is doubly escaped (`&quot;` entities AND backslash-escaped quotes),
+ * with uuid dashes as `-` and date slashes as `\/`.
+ */
+export const PJ_RESULT_LINK = `<a href="#" id="formBuscador:repeat:0:j_idt491" name="formBuscador:repeat:0:j_idt491" onclick="jsf.util.chain(this,event,&quot;RichFaces.$('panelState').show();&quot;,&quot;RichFaces.ajax(\\&quot;formBuscador:repeat:0:j_idt491\\&quot;,event,{\\&quot;parameters\\&quot;:{\\&quot;uuid\\&quot;:\\&quot;82a1732b\\\\u002Dbee7\\\\u002D40f6\\\\u002D9e61\\\\u002D19db22c3a6be\\&quot;,\\&quot;recurso\\&quot;:\\&quot;Casación\\&quot;,\\&quot;nroexp\\&quot;:\\&quot;001785\\\\u002D2024\\&quot;,\\&quot;palabras\\&quot;:\\&quot;Admisibilidad del recurso de casación\\&quot;,\\&quot;pretensiones\\&quot;:\\&quot;Violación de la libertad sexual Art. 170\\&quot;,\\&quot;normaDI\\&quot;:\\&quot;\\&quot;,\\&quot;tipoResolucion\\&quot;:\\&quot;Ejecutoria Suprema\\&quot;,\\&quot;fechaResolucion\\&quot;:\\&quot;09\\\\\\/07\\\\\\/2026\\&quot;,\\&quot;sala\\&quot;:\\&quot;Sala Penal Permanente\\&quot;,\\&quot;sumilla\\&quot;:\\&quot;En el caso, solo los argumentos.\\&quot;} ,\\&quot;incId\\&quot;:\\&quot;1\\&quot;} )&quot;);return false;" title="Ver"><img src="../imagen/btn-ver-ficha.png" style="border:0" /></a>`;
+
+/** A second result link, distinct index/uuid/recurso (raw uuid uses the
+ *  site's `-` dash escaping, so we swap the unescaped hex prefix). */
+const PJ_RESULT_LINK_2 = PJ_RESULT_LINK.replaceAll('repeat:0', 'repeat:1')
+  .replaceAll('82a1732b', '9c8d4d4a')
+  .replace('Casación', 'Apelación');
+
+/** A page fragment carrying two results plus the total-count text. */
+export const PJ_RESULTS_PAGE = `<span id="formBuscador:optResultado" class="Titulos">De 9916 resoluciones, se obtuvieron 208341 resultados.</span>
+${PJ_RESULT_LINK}
+${PJ_RESULT_LINK_2}`;
+
+/** The inicio.xhtml search form (trimmed): hidden fields, a select, the two
+ *  search buttons (general + specialized) and the ViewState. */
+export const PJ_INICIO_FORM = `<form id="formBuscador" name="formBuscador" method="post" action="/jurisprudenciaweb/faces/page/resultado.xhtml">
+<input type="hidden" name="formBuscador" value="formBuscador" />
+<input type="hidden" name="javax.faces.ViewState" id="javax.faces.ViewState" value="123:456" />
+<input id="formBuscador:txtBusqueda" type="text" name="formBuscador:txtBusqueda" value="" />
+<select id="formBuscador:buCorte" name="formBuscador:buCorte"><option value="1" selected="selected">Corte Suprema</option><option value="2">Corte Superior</option></select>
+<input type="checkbox" name="formBuscador:buNcpp" />
+<a href="#" onclick="jsf.util.chain(this,event,'X','mojarra.jsfcljs(document.getElementById(\\'formBuscador\\'),{\\'formBuscador:j_idt31\\':\\'formBuscador:j_idt31\\',\\'forward\\':\\'buscar\\',\\'busqueda\\':\\'especializada\\',\\'formBuscador:j_idt34\\':\\'21\\'},\\'\\')');return false">Especializada</a>
+<a href="#" onclick="jsf.util.chain(this,event,'X','mojarra.jsfcljs(document.getElementById(\\'formBuscador\\'),{\\'formBuscador:j_idt69\\':\\'formBuscador:j_idt69\\',\\'forward\\':\\'buscar\\',\\'formBuscador:j_idt71\\':\\'21\\',\\'formBuscador:j_idt72\\':\\'DESC\\'},\\'\\')');return false">General</a>
+<input id="formBuscador:spinner" name="formBuscador:spinner" size="10" type="text" value="1" />
+<input type="submit" name="formBuscador:j_idt447" value="IR" />
+</form>`;

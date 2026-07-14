@@ -17,7 +17,7 @@ import { HttpClient } from './core/http-client';
 import { JsfSession, SessionExpiredError } from './core/jsf-session';
 import { log } from './core/logger';
 import { RetriesExhaustedError, withRetry, DEFAULT_RETRY } from './core/retry';
-import { fileNameFromDisposition, sanitizeFileName } from './core/files';
+import { sanitizeFileName } from './core/files';
 import { SiteAdapter } from './sites/adapter';
 import { StateStore } from './state';
 import { DocumentRecord, ScraperOptions } from './types';
@@ -173,7 +173,7 @@ async function downloadRow(
   opts: ScraperOptions,
   pageSize: number,
 ): Promise<boolean> {
-  if (!row.uuid || !row.downloadButtonId) {
+  if (!row.uuid) {
     log.debug(`Row ${row.rowIndex}: no PDF link, metadata only`);
     return false;
   }
@@ -182,23 +182,21 @@ async function downloadRow(
     return false;
   }
 
-  const label = `PDF ${row.fields.nroResolucionApelacion || row.uuid}`;
+  const label = `PDF ${downloadLabel(row)}`;
 
   const attempt = async (target: DocumentRecord): Promise<string> => {
-    const res = await session.postDownload(adapter.buildDownloadFields(target));
-    const body = res.data;
+    const { bytes, serverFileName } = await adapter.downloadPdf(session, target);
 
-    // The site fails silently by re-rendering the page (HTML instead of a
-    // PDF stream) when the view no longer has the row: treat as session loss.
-    if (!looksLikePdf(body)) {
-      throw new SessionExpiredError(
-        `expected PDF, got ${res.headers['content-type'] ?? 'unknown'} (${body.length} bytes)`,
-      );
+    // Both sites fail "softly": OEFA re-renders the page as HTML when the row
+    // is no longer in the view; PJ answers a stale/lost session with an HTML
+    // page instead of the PDF stream. Anything that is not a PDF is treated
+    // as session loss so recovery re-establishes and retries.
+    if (!looksLikePdf(bytes)) {
+      throw new SessionExpiredError(`expected PDF, got ${bytes.length} bytes of non-PDF content`);
     }
 
-    const serverName = fileNameFromDisposition(res.headers['content-disposition']);
-    const fileName = uniqueFileName(state.pdfDir, adapter.pdfFileName(target, serverName), target);
-    fs.writeFileSync(path.join(state.pdfDir, fileName), body);
+    const fileName = uniqueFileName(state.pdfDir, adapter.pdfFileName(target, serverFileName), target);
+    fs.writeFileSync(path.join(state.pdfDir, fileName), bytes);
     return fileName;
   };
 
@@ -268,6 +266,12 @@ async function reestablish(
 
 function looksLikePdf(body: Buffer): boolean {
   return body.subarray(0, 5).toString('latin1') === '%PDF-';
+}
+
+/** A short, human-readable id for a row, tolerant of per-site field names. */
+function downloadLabel(row: DocumentRecord): string {
+  const f = row.fields;
+  return f.nroResolucionApelacion || f.numeroExpediente || f.nroexp || row.uuid || `row-${row.rowIndex}`;
 }
 
 /**

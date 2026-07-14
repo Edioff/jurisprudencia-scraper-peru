@@ -12,6 +12,11 @@ import { AxiosError, AxiosResponse } from 'axios';
 
 import { parsePartialResponse } from '../src/core/jsf-session';
 import { OefaAdapter } from '../src/sites/oefa';
+import {
+  parseResults as parsePjResults,
+  harvestForm,
+  generalSearchButton,
+} from '../src/sites/pj';
 import { DocumentRecord } from '../src/types';
 import {
   isRetryable,
@@ -28,6 +33,9 @@ import {
   PARTIAL_RESPONSE_SPLIT_CDATA,
   PARTIAL_RESPONSE_ERROR,
   PARTIAL_RESPONSE_REDIRECT,
+  PJ_RESULT_LINK,
+  PJ_RESULTS_PAGE,
+  PJ_INICIO_FORM,
 } from './fixtures';
 
 // ---------------------------------------------------------------------------
@@ -104,6 +112,53 @@ test('search: reads total and page size from the paginator', async () => {
   assert.equal(result.totalRecords, 1753);
   assert.equal(result.pageSize, 10);
   assert.equal(result.firstPageRows.length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// PJ (RichFaces) parsing
+
+test('PJ: extracts metadata + uuid from a doubly-escaped result link', () => {
+  const rows = parsePjResults(PJ_RESULT_LINK, 0);
+  assert.equal(rows.length, 1);
+  const r = rows[0];
+  assert.equal(r.uuid, '82a1732b-bee7-40f6-9e61-19db22c3a6be'); // dashes decoded
+  assert.equal(r.rowIndex, 0);
+  assert.equal(r.fields.recurso, 'Casación'); // accents preserved
+  assert.equal(r.fields.nroexp, '001785-2024');
+  assert.equal(r.fields.fechaResolucion, '09/07/2026'); // \/ decoded
+  assert.equal(r.fields.sala, 'Sala Penal Permanente');
+});
+
+test('PJ: rowIndex tracks the RichFaces repeat index across pages', () => {
+  // On page 2 the repeat indices are 10..19; the parser keeps them absolute.
+  const page2 = PJ_RESULT_LINK.replace(/repeat:0/g, 'repeat:13');
+  const rows = parsePjResults(page2, 1);
+  assert.equal(rows[0].rowIndex, 13);
+});
+
+test('PJ: parses two results from a page fragment', () => {
+  const rows = parsePjResults(PJ_RESULTS_PAGE, 0);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].uuid, '82a1732b-bee7-40f6-9e61-19db22c3a6be');
+  assert.equal(rows[1].uuid, '9c8d4d4a-bee7-40f6-9e61-19db22c3a6be');
+  assert.equal(rows[1].rowIndex, 1);
+  assert.equal(rows[1].fields.recurso, 'Apelación');
+});
+
+test('PJ: harvestForm collects inputs + selected option, drops buttons/unchecked', () => {
+  const fields = harvestForm(PJ_INICIO_FORM, 'formBuscador');
+  assert.equal(fields['formBuscador'], 'formBuscador');
+  assert.equal(fields['formBuscador:txtBusqueda'], '');
+  assert.equal(fields['formBuscador:buCorte'], '1'); // selected option
+  assert.equal('formBuscador:buNcpp' in fields, false); // unchecked checkbox omitted
+  assert.equal('formBuscador:j_idt447' in fields, false); // submit button omitted
+});
+
+test('PJ: picks the general-search button (not the specialized tab)', () => {
+  const params = generalSearchButton(PJ_INICIO_FORM);
+  assert.equal(params['formBuscador:j_idt69'], 'formBuscador:j_idt69');
+  assert.equal(params['forward'], 'buscar');
+  assert.equal('busqueda' in params, false); // 'especializada' marker rejected
 });
 
 // ---------------------------------------------------------------------------

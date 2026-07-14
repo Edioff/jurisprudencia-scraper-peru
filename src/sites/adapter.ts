@@ -1,11 +1,14 @@
 /**
  * Site adapter contract.
  *
- * The JSF mechanics (ViewState chaining, partial-response parsing, retry,
- * pagination loop, download plumbing) are identical across these government
- * sites — what changes per site are form/component ids, result columns and
- * download parameters. Adapters own exactly that surface, so adding a new
- * site means writing one focused file (see `oefa.ts`).
+ * The JSF mechanics (session + ViewState chaining, retry, the pagination
+ * loop, resume, the record-and-continue download policy) live in the core
+ * and orchestrator. Adapters own exactly what differs per site: how to run
+ * the search, how to page, how a result row maps to metadata, and how to
+ * fetch its PDF. That surface is small enough that adding a site is one
+ * focused file — `oefa.ts` (PrimeFaces) and `pj.ts` (RichFaces) are the
+ * two reference implementations, and they interact with their servers
+ * quite differently despite sharing this contract.
  */
 
 import { JsfSession } from '../core/jsf-session';
@@ -16,6 +19,12 @@ export interface SearchResult {
   pageSize: number;
   /** Rows rendered on the first page by the search itself. */
   firstPageRows: DocumentRecord[];
+}
+
+/** Raw PDF bytes plus the server-suggested file name, if any. */
+export interface PdfDownload {
+  bytes: Buffer;
+  serverFileName: string | null;
 }
 
 export interface SiteAdapter {
@@ -33,15 +42,15 @@ export interface SiteAdapter {
    */
   search(session: JsfSession): Promise<SearchResult>;
 
-  /** Fetch one result page via the table's AJAX pagination. */
+  /** Fetch one result page's rows via the site's pagination mechanism. */
   fetchPage(session: JsfSession, pageIndex: number, pageSize: number): Promise<DocumentRecord[]>;
 
   /**
-   * Form fields (minus ViewState, which the session injects) that emulate
-   * clicking the row's download link. Only valid while the row's page is
-   * the one currently rendered in the view state.
+   * Fetch a row's PDF. The adapter owns the transport (a JSF form POST for
+   * OEFA, a plain resource GET for PJ). The orchestrator handles retry,
+   * validation and persistence around this call.
    */
-  buildDownloadFields(row: DocumentRecord): Record<string, string>;
+  downloadPdf(session: JsfSession, row: DocumentRecord): Promise<PdfDownload>;
 
   /** Compose a descriptive local file name for a row's PDF. */
   pdfFileName(row: DocumentRecord, serverFileName: string | null): string;

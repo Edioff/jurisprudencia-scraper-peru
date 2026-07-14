@@ -38,12 +38,22 @@ const VIEWSTATE_INPUT = /name="javax\.faces\.ViewState"[^>]*value="([^"]+)"/;
 
 export class JsfSession {
   private viewState: string | null = null;
+  private lastHtml = '';
 
   constructor(
     readonly http: HttpClient,
-    /** Path of the page this session operates on (GET + POST target). */
+    /** Path the session GETs on init and POSTs to by default. */
     private readonly pagePath: string,
   ) {}
+
+  /**
+   * The most recent full HTML page the session loaded (init or postPage).
+   * Adapters for classic JSF (RichFaces) harvest their form fields from it,
+   * since those sites require the entire form to be resubmitted.
+   */
+  get pageHtml(): string {
+    return this.lastHtml;
+  }
 
   /**
    * GET the entry page and capture the initial ViewState.
@@ -68,6 +78,7 @@ export class JsfSession {
       );
     }
     this.viewState = match[1];
+    this.lastHtml = html;
     log.debug(`Session initialized (ViewState ${this.viewState.length} chars)`);
   }
 
@@ -121,6 +132,45 @@ export class JsfSession {
       {},
       timeoutMs,
     );
+  }
+
+  /**
+   * Full-form POST that returns a whole HTML page rather than a partial
+   * response — the interaction model of classic (non-AJAX) JSF like the
+   * RichFaces PJ site, where search and pagination navigate the page and
+   * the server answers via a redirect. Rotates the ViewState from the
+   * returned HTML. Retried with backoff like the AJAX path.
+   */
+  async postPage(
+    fields: Record<string, string>,
+    label: string,
+    targetPath = this.pagePath,
+  ): Promise<string> {
+    const res = await withRetry(
+      () =>
+        this.http.postForm(targetPath, {
+          ...fields,
+          'javax.faces.ViewState': this.requireViewState(),
+        }),
+      { ...DEFAULT_RETRY, label },
+    );
+    const html = res.data.toString('utf-8');
+    const match = html.match(VIEWSTATE_INPUT);
+    if (!match) {
+      throw new SessionExpiredError(`no ViewState in response to ${label} (session likely lost)`);
+    }
+    this.viewState = match[1];
+    this.lastHtml = html;
+    return html;
+  }
+
+  /** Retried GET returning the raw bytes — used by adapters whose file
+   *  downloads are plain resource URLs (e.g. PJ's ServletDescarga). */
+  async get(path: string, timeoutMs = 180_000): Promise<AxiosResponse<Buffer>> {
+    return withRetry(() => this.http.get(path, timeoutMs), {
+      ...DEFAULT_RETRY,
+      label: `GET ${path}`,
+    });
   }
 }
 
