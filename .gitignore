@@ -22,3 +22,7 @@ Thumbs.db
 # Local recon scratch (not part of the deliverable)
 recon-pj/
 recon-pj.sh
+
+# Local scratch / exploration (not part of the deliverable)
+/test-*.ts
+/code-review-findings.json
