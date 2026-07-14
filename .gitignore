@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Scraper output (data, PDFs, state)
+output/
+
+# Logs
+*.log
+
+# Environment
+.env
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local recon scratch (not part of the deliverable)
+recon-pj/
+recon-pj.sh

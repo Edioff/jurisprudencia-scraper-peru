@@ -1,0 +1,29 @@
+{
+  "name": "scraper-challenge",
+  "version": "1.0.0",
+  "description": "TypeScript scraper for Peruvian government document repositories built on JSF/PrimeFaces — pure HTTP (axios + cheerio), no browser automation",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "scrape": "ts-node src/index.ts scrape",
+    "retry-failed": "ts-node src/index.ts retry-failed",
+    "start": "node dist/index.js scrape",
+    "test": "node --require ts-node/register --test tests/unit.test.ts"
+  },
+  "keywords": [
+    "scraper",
+    "typescript",
+    "jsf",
+    "primefaces"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
+  }
+}
