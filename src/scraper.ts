@@ -78,7 +78,6 @@ export async function runScrape(adapter: SiteAdapter, opts: ScraperOptions): Pro
       );
     }
 
-    state.addDocuments(rows);
     log.info(`Page ${page + 1}/${totalPages}: ${rows.length} rows`);
 
     // Defense in depth: a page that yields 0 rows while the corpus is
@@ -91,6 +90,22 @@ export async function runScrape(adapter: SiteAdapter, opts: ScraperOptions): Pro
       pagesThisRun++;
       continue;
     }
+
+    // Enrich each row with its full detail record (the "Ver Ficha" fields)
+    // while this page is still the current view — it's a stateful AJAX call,
+    // so it must run sequentially, before the (possibly concurrent) downloads.
+    if (adapter.fetchDetail && !opts.skipDetails) {
+      for (const row of rows) {
+        if (interrupted) break;
+        try {
+          Object.assign(row.fields, await adapter.fetchDetail(session, row));
+        } catch (err) {
+          log.warn(`  detail ${downloadLabel(row)}: ${(err as Error).message} — keeping list metadata`);
+        }
+      }
+    }
+
+    state.addDocuments(rows);
 
     // Only mark the page complete when the row loop ran to its natural end.
     let processedAllRows = true;

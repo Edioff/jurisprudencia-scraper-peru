@@ -91,18 +91,18 @@ export class JsfSession {
    * Send a JSF AJAX (partial) POST and parse the `<partial-response>`.
    * Rotates the stored ViewState when the response carries a new one.
    */
-  async postAjax(fields: Record<string, string>): Promise<PartialResponse> {
+  async postAjax(fields: Record<string, string>, targetPath = this.pagePath): Promise<PartialResponse> {
     const res = await withRetry(
       () =>
         this.http.postForm(
-          this.pagePath,
+          targetPath,
           { ...fields, 'javax.faces.ViewState': this.requireViewState() },
           {
             'Faces-Request': 'partial/ajax',
             'X-Requested-With': 'XMLHttpRequest',
           },
         ),
-      { ...DEFAULT_RETRY, label: `AJAX ${fields['javax.faces.source'] ?? this.pagePath}` },
+      { ...DEFAULT_RETRY, label: `AJAX ${fields['javax.faces.source'] ?? targetPath}` },
     );
 
     const xml = res.data.toString('utf-8');

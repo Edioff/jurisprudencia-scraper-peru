@@ -61,6 +61,17 @@ export interface SiteAdapter {
   fetchPage(session: JsfSession, pageIndex: number, pageSize: number): Promise<DocumentRecord[]>;
 
   /**
+   * Optional: fetch a document's full detail record beyond what the results
+   * list shows. PJ's list carries ~9 fields but each row has a "Ver Ficha"
+   * view with ~40 (judges, chamber, procedural history…) — the challenge asks
+   * for *all* available information, so adapters expose it here. Must run
+   * while the row's page is the current view (it's a stateful AJAX call), so
+   * the orchestrator calls it sequentially per page. Adapters whose list is
+   * already complete (OEFA) omit this.
+   */
+  fetchDetail?(session: JsfSession, row: DocumentRecord): Promise<Record<string, string>>;
+
+  /**
    * Fetch a row's PDF. The adapter owns the transport (a JSF form POST for
    * OEFA, a plain resource GET for PJ). The orchestrator handles retry,
    * validation and persistence around this call.

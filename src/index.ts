@@ -36,6 +36,7 @@ Flags:
   --attempts <n>   Max attempts per download before recording failure (default: 5)
   --concurrency <n> Parallel PDF downloads, where the site allows it (default: 1)
   --proxies <file> Rotate through proxy URLs listed in <file>, one per line (default: direct)
+  --skip-details   Skip the per-document detail (ficha) fetch, keep list metadata only
   --skip-pdfs      Extract metadata only, skip PDF downloads
   --verbose        Debug logging
 `;
@@ -52,6 +53,7 @@ function parseArgs(argv: string[]): { command: string; opts: ScraperOptions } {
     maxAttempts: 5,
     concurrency: 1,
     proxiesFile: '',
+    skipDetails: false,
     verbose: false,
   };
 
@@ -89,6 +91,9 @@ function parseArgs(argv: string[]): { command: string; opts: ScraperOptions } {
         break;
       case '--skip-pdfs':
         opts.skipPdfs = true;
+        break;
+      case '--skip-details':
+        opts.skipDetails = true;
         break;
       case '--verbose':
         opts.verbose = true;

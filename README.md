@@ -57,9 +57,15 @@ All flags:
 --attempts <n>    Max attempts per download before recording failure (default: 5)
 --concurrency <n> Parallel PDF downloads, where the site allows it (default: 1)
 --proxies <file>  Rotate through proxy URLs in <file>, one per line (default: direct)
+--skip-details    Skip the per-document detail (ficha) fetch; keep list metadata only
 --skip-pdfs       Extract metadata only
 --verbose         Debug logging
 ```
+
+By default the PJ scraper extracts the **full ~40-field detail record** of each
+document (the "Ver Ficha" data), not just the ~9 list fields — see
+[How the sites work](#how-the-sites-work). Pass `--skip-details` for a faster,
+list-only pass.
 
 Neither full run needs to finish in one sitting — interrupt it (Ctrl+C) at any
 point and re-run to resume. PJ is a large corpus (208k documents); the point of
@@ -134,13 +140,24 @@ tree. The flow is classic, **non-AJAX** JSF:
   ("se obtuvieron 208341 resultados") and renders 10 items per page. Paging is
   another full form POST that drives the RichFaces page-number spinner
   (`formBuscador:spinner`) + its "IR" button to jump to any 1-based page.
-- **Metadata.** Each result is a `formBuscador:repeat:N:...` block whose
-  download link's `onclick` embeds a JS object with **every** field we want
-  (uuid, expediente, recurso, sala, fecha, sumilla…). We read metadata straight
-  from that object rather than scraping the formatted panel — more robust, and
-  `N` is the row's absolute index across the whole result set. The object is
-  doubly escaped in the markup (`&quot;` entities *and* `\"`), with `-`
-  for dashes; `parseResults` collapses all of it.
+- **List metadata.** Each result is a `formBuscador:repeat:N:...` block whose
+  link `onclick` embeds a JS object with ~9 fields (uuid, expediente, recurso,
+  sala, fecha, sumilla…). We read metadata straight from that object rather
+  than scraping the formatted panel — more robust, and `N` is the row's
+  absolute index across the whole result set. The object is doubly escaped in
+  the markup (`&quot;` entities *and* `\"`), with `-` for dashes;
+  `parseResults` collapses all of it.
+- **Full detail (the "Ver Ficha" modal).** The challenge asks for *all* the
+  information of each document, and the list is only a preview — each row's
+  "Ver Ficha" opens a modal with ~40 fields (the panel of judges, ponente,
+  fallo/sentido, distrito judicial, materia, régimen procesal, N° de expediente
+  de la sala superior, and the full procedural-origin history). It's a
+  RichFaces AJAX (`render=@component`) that re-renders the popup; the scraper
+  fires it per row and parses the label/value grid (`fetchDetail` + `parseFicha`),
+  merging all of it into the document. This is a stateful call (the row must be
+  in the current view), so details are fetched sequentially per page; on the
+  server's flaky ViewExpired the page is re-established and the fetch retried.
+  Disable with `--skip-details` for a fast list-only run.
 - **PDF download.** A plain `GET /jurisprudenciaweb/ServletDescarga?uuid=<uuid>`
   streams the PDF (`Content-Disposition: attachment`). No arming, no ViewState.
 - **Flakiness.** The PJ server returns intermittent `500`/`503`s on
@@ -190,7 +207,7 @@ src/
 └── sites/
     ├── adapter.ts      # SiteAdapter contract
     ├── oefa.ts         # OEFA (PrimeFaces): AJAX search/pagination, form-POST download
-    ├── pj.ts           # PJ (RichFaces): full-form search/pagination, servlet GET download
+    ├── pj.ts           # PJ (RichFaces): full-form search/pagination, ficha detail, servlet GET download
     └── index.ts        # registry
 ```
 
@@ -269,15 +286,17 @@ reference implementations — pick whichever is closer to your target.
 npm test
 ```
 
-28 unit tests (Node's built-in runner, no extra dependencies) cover the pure
+31 unit tests (Node's built-in runner, no extra dependencies) cover the pure
 logic against fixtures captured from **both** live sites:
 
 - **OEFA:** partial-response parsing (including JSF's split-CDATA escaping of
   literal `]]>`), row extraction from both fragment shapes.
 - **PJ:** metadata + uuid extraction from the doubly-escaped RichFaces download
   link (including a value that itself contains quotes — a real trap), the
-  absolute `repeat:N` row index, form-field harvesting, and picking the
-  general-search button over the specialized one.
+  absolute `repeat:N` row index, form-field harvesting, picking the
+  general-search button over the specialized one, and parsing the ~40-field
+  "Ver Ficha" detail modal (accented labels slugged, blank values preserved,
+  repeated labels not clobbered).
 - **Shared:** 429/backoff/Retry-After semantics (incl. 503), retry exhaustion
   with accurate attempt counts, cookie handling, CSV escaping, Content-Disposition
   and file-name sanitization, the bounded-concurrency pool, and proxy parsing.

@@ -65,6 +65,8 @@ export interface ScraperOptions {
   maxDocs: number;
   /** Extract metadata only, skip PDF downloads. */
   skipPdfs: boolean;
+  /** Skip the per-document detail (ficha) fetch, keeping only list metadata. */
+  skipDetails: boolean;
   /** Max attempts per download before recording it as failed. */
   maxAttempts: number;
   /** Max concurrent PDF downloads (only applied when the adapter allows it). */

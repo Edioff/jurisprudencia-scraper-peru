@@ -49,6 +49,12 @@ export const PJ_RESULTS_PAGE = `<span id="formBuscador:optResultado" class="Titu
 ${PJ_RESULT_LINK}
 ${PJ_RESULT_LINK_2}`;
 
+/** The "Ver Ficha" modal body (trimmed to a few label/value rows, verbatim
+ *  markup): a bold label div followed by a value div. Includes an accented
+ *  label, an empty value, and a label ("Tipo de Resolución") that repeats
+ *  later in the modal with a blank value. */
+export const PJ_FICHA_MODAL = `<div class="col-sm-6 txtbold">Fecha de la Resolución: </div><div class="col-sm-6 marginb2"><span class="data">09/07/2026</span></div><div class="col-sm-6 txtbold" style="clear:both;">Tipo de Resolución: </div><div class="col-sm-6 marginb2"><span class="data">Ejecutoria Suprema</span></div><div class="col-sm-6 txtbold" style="clear:both;">Jueces Supremos:</div><div class="col-sm-6 marginb2"><span class="data">CAMPOS BARRANZUELA, PRADO SALDARRIAGA</span></div><div class="col-sm-6 txtbold" style="clear:both;">*** Ponente:</div><div class="col-sm-6 marginb2"><span class="data"></span></div><div class="col-sm-6 txtbold">N° de Expediente de la Sala Superior:</div><div class="col-sm-6 marginb2"><span class="data">2506-2019-0</span></div><div class="col-sm-6 txtbold">Tipo de Resolución:</div><div class="col-sm-6 marginb2"><span class="data"></span></div>`;
+
 /** The inicio.xhtml search form (trimmed): hidden fields, a select, the two
  *  search buttons (general + specialized) and the ViewState. */
 export const PJ_INICIO_FORM = `<form id="formBuscador" name="formBuscador" method="post" action="/jurisprudenciaweb/faces/page/resultado.xhtml">

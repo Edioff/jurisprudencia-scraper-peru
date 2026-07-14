@@ -23,7 +23,7 @@
  *    streams the PDF (`Content-Disposition: attachment`). No arming needed.
  */
 
-import { JsfSession } from '../core/jsf-session';
+import { JsfSession, SessionExpiredError } from '../core/jsf-session';
 import { DocumentRecord } from '../types';
 import { PdfDownload, SearchResult, SiteAdapter } from './adapter';
 import { fileNameFromDisposition, sanitizeFileName } from '../core/files';
@@ -33,7 +33,15 @@ import { sleep } from '../core/retry';
 const FORM = 'formBuscador';
 const SPINNER = `${FORM}:spinner`;
 const SERVLET = '/jurisprudenciaweb/ServletDescarga?uuid=';
+/** The detail-modal container the "Ver Ficha" AJAX re-renders. */
+const POPUP = `${FORM}:popupResolucion`;
 const PAGE_SIZE = 10;
+
+/** The list-level metadata keys the ficha request echoes back to the server. */
+const FICHA_ECHO_KEYS: readonly string[] = [
+  'recurso', 'nroexp', 'palabras', 'pretensiones', 'normaDI',
+  'tipoResolucion', 'fechaResolucion', 'sala', 'sumilla',
+];
 
 /** The site phrases the count a few ways ("De un total de N resultados",
  *  "se obtuvieron N resultados"); the number always precedes "resultados". */
@@ -121,6 +129,37 @@ export class PjAdapter implements SiteAdapter {
     };
   }
 
+  /**
+   * Fetch the "Ver Ficha" modal and return its ~40 detail fields. It's a
+   * RichFaces AJAX that re-renders the popup (`render=@component`) carrying
+   * the row's identifiers. The row must be rendered in the current view, so
+   * on the flaky server's ViewExpired we restore the page (re-paginate) and
+   * retry rather than losing the detail.
+   */
+  async fetchDetail(session: JsfSession, row: DocumentRecord): Promise<Record<string, string>> {
+    if (!row.downloadButtonId || !row.uuid) return {};
+    const btn = row.downloadButtonId;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const fields = harvestForm(session.pageHtml, FORM);
+        Object.assign(fields, fichaParams(row, btn));
+        const res = await session.postAjax(fields, this.resultPath);
+        const modal = res.updates.get(POPUP);
+        const decoded = modal ? htmlUnescape(modal) : '';
+        if (!/DATOS DE LA RESOLUCI/i.test(decoded)) {
+          throw new SessionExpiredError('ficha modal came back empty');
+        }
+        return parseFicha(decoded);
+      } catch (err) {
+        if (attempt === 3) throw err;
+        // Re-establish a fresh, valid view on the row's page, then retry.
+        await this.fetchPage(session, row.page, PAGE_SIZE);
+      }
+    }
+    return {};
+  }
+
   pdfFileName(row: DocumentRecord, serverFileName: string | null): string {
     // e.g. "Casacion-001785-2024__Resolucion_10_2026....pdf"
     const recurso = row.fields.recurso || 'resolucion';
@@ -201,6 +240,63 @@ export function parseResults(html: string, pageIndex: number): DocumentRecord[] 
     });
   }
   return rows;
+}
+
+/** Build the "Ver Ficha" AJAX parameters for a row (minus the form fields,
+ *  which the caller harvests). Mirrors the RichFaces click request. */
+function fichaParams(row: DocumentRecord, btn: string): Record<string, string> {
+  const echoed: Record<string, string> = { uuid: row.uuid ?? '' };
+  for (const key of FICHA_ECHO_KEYS) echoed[key] = row.fields[key] ?? '';
+  return {
+    ...echoed,
+    'javax.faces.source': btn,
+    'javax.faces.partial.event': 'click',
+    'javax.faces.partial.execute': `${btn} @component`,
+    'javax.faces.partial.render': '@component',
+    'org.richfaces.ajax.component': btn,
+    [btn]: btn,
+    'AJAX:EVENTS_COUNT': '1',
+    'javax.faces.partial.ajax': 'true',
+  };
+}
+
+/**
+ * Parse the detail modal's HTML into fields. Each row is
+ *   <div class="...txtbold...">Label:</div>
+ *   <div class="...marginb2..."><span class="data">Value</span></div>
+ * so we pair every bold label with the value box that follows it. Section
+ * headers (no value box) and the `***` prefixes are dropped.
+ */
+export function parseFicha(modalHtml: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const re =
+    /<div class="[^"]*txtbold[^"]*"[^>]*>([^<]+?)\s*<\/div>\s*<div class="[^"]*marginb2[^"]*"[^>]*>([\s\S]*?)<\/div>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(modalHtml)) !== null) {
+    const label = m[1].replace(/\*+/g, '').replace(/:\s*$/, '').replace(/\s+/g, ' ').trim();
+    const value = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    const key = slug(label);
+    // A few labels repeat across the modal's sections (e.g. "Tipo de
+    // Resolución"). Keep the first non-empty value so a later blank one in
+    // another section can't clobber real data.
+    if (key && (!(key in out) || (out[key] === '' && value !== ''))) out[key] = value;
+  }
+  return out;
+}
+
+/** "N° de Expediente de la Sala Superior" -> "nroDeExpedienteDeLaSalaSuperior". */
+function slug(label: string): string {
+  const words = label
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // strip combining accents
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+  if (words.length === 0) return '';
+  return words
+    .map((w, i) => (i === 0 ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+    .join('');
 }
 
 /**

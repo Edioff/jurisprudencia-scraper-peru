@@ -21,6 +21,7 @@ import {
   parseResults as parsePjResults,
   harvestForm,
   generalSearchButton,
+  parseFicha,
 } from '../src/sites/pj';
 import { DocumentRecord } from '../src/types';
 import {
@@ -43,6 +44,7 @@ import {
   PJ_RESULT_LINK,
   PJ_RESULTS_PAGE,
   PJ_INICIO_FORM,
+  PJ_FICHA_MODAL,
 } from './fixtures';
 
 // ---------------------------------------------------------------------------
@@ -178,6 +180,16 @@ test('PJ: picks the general-search button (not the specialized tab)', () => {
   assert.equal(params['formBuscador:j_idt69'], 'formBuscador:j_idt69');
   assert.equal(params['forward'], 'buscar');
   assert.equal('busqueda' in params, false); // 'especializada' marker rejected
+});
+
+test('PJ: parseFicha maps the detail modal into slugged fields', () => {
+  const fields = parseFicha(PJ_FICHA_MODAL);
+  assert.equal(fields.fechaDeLaResolucion, '09/07/2026');
+  assert.equal(fields.juecesSupremos, 'CAMPOS BARRANZUELA, PRADO SALDARRIAGA');
+  assert.equal(fields.ponente, ''); // empty value preserved
+  assert.equal(fields.nDeExpedienteDeLaSalaSuperior, '2506-2019-0'); // accents/symbols slugged
+  // a label repeated later with a blank value must not clobber the real one
+  assert.equal(fields.tipoDeResolucion, 'Ejecutoria Suprema');
 });
 
 // ---------------------------------------------------------------------------
