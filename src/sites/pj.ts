@@ -57,6 +57,12 @@ export class PjAdapter implements SiteAdapter {
   readonly name = 'pj';
   readonly description = 'PJ — Jurisprudencia Nacional Sistematizada (Poder Judicial del Perú)';
   readonly baseUrl = 'https://jurisprudencia.pj.gob.pe';
+  /** recurso + expediente identify every resolution; the rest (sumilla,
+   *  palabras, normaDI…) are genuinely optional and vary by document. */
+  readonly requiredFields = ['recurso', 'nroexp'] as const;
+  /** ServletDescarga is a stateless GET (uuid + cookie), so downloads
+   *  parallelize safely within one session. */
+  readonly concurrentDownloads = true;
   /** Session inits (GETs) here; the search form lives on this page. */
   readonly pagePath = '/jurisprudenciaweb/faces/page/inicio.xhtml';
   private readonly resultPath = '/jurisprudenciaweb/faces/page/resultado.xhtml';
@@ -65,39 +71,45 @@ export class PjAdapter implements SiteAdapter {
     // The PJ server returns intermittent 500s on navigation. A fresh view
     // (re-init) per attempt is more reliable than re-posting a possibly
     // stale ViewState, so search re-establishes the session between tries.
-    const html = await withReinit(session, 'search', async () => {
+    return withReinit(session, 'search', async () => {
       const inicio = session.pageHtml;
       // Full form + the general-search button's params: RichFaces requires
       // the entire form to be resubmitted.
       const fields = harvestForm(inicio, FORM);
       Object.assign(fields, generalSearchButton(inicio));
       const page = await session.postPage(fields, 'search', this.pagePath);
-      if (!TOTAL_RECORDS.test(page)) {
-        throw new Error('PJ search returned no result count (transient server error?)');
+      const total = page.match(TOTAL_RECORDS);
+      if (!total) throw new Error('PJ search returned no result count (transient server error?)');
+      const firstPageRows = parseResults(page, 0);
+      // A count but no parseable rows means the server returned an error/empty
+      // shell (it is flaky) — throw so withReinit gets a fresh view and retries
+      // rather than reporting a bogus empty first page.
+      if (Number(total[1]) > 0 && firstPageRows.length === 0) {
+        throw new Error('PJ search: result count present but 0 rows parsed (transient error page?)');
       }
-      return page;
+      return { totalRecords: Number(total[1]), pageSize: PAGE_SIZE, firstPageRows };
     });
-
-    return {
-      totalRecords: Number(html.match(TOTAL_RECORDS)![1]),
-      pageSize: PAGE_SIZE,
-      firstPageRows: parseResults(html, 0),
-    };
   }
 
   async fetchPage(session: JsfSession, pageIndex: number, _pageSize: number): Promise<DocumentRecord[]> {
     // Jump to a 1-based page via the page-number spinner + "IR" button.
     // On a lost view (re-init), the search must be replayed before the
     // spinner exists again — hence the re-search inside the recovery.
-    const html = await withReinit(session, `page ${pageIndex + 1}`, async () => {
+    return withReinit(session, `page ${pageIndex + 1}`, async () => {
       if (!/formBuscador:spinner/.test(session.pageHtml)) await this.search(session);
       const current = session.pageHtml;
       const fields = harvestForm(current, FORM);
       fields[SPINNER] = String(pageIndex + 1);
       fields[irButtonId(current)] = 'IR';
-      return session.postPage(fields, `page ${pageIndex + 1}`, this.resultPath);
+      const html = await session.postPage(fields, `page ${pageIndex + 1}`, this.resultPath);
+      const rows = parseResults(html, pageIndex);
+      // Every in-range page has at least one row; 0 rows is a transient error
+      // page, not a real empty page. Throw so it is retried, not lost.
+      if (rows.length === 0) {
+        throw new Error(`PJ page ${pageIndex + 1}: 0 rows parsed (transient error page?)`);
+      }
+      return rows;
     });
-    return parseResults(html, pageIndex);
   }
 
   async downloadPdf(session: JsfSession, row: DocumentRecord): Promise<PdfDownload> {
@@ -162,8 +174,10 @@ export function parseResults(html: string, pageIndex: number): DocumentRecord[] 
     .replace(/\\+"/g, '"')
     .replace(/\\+u002[dD]/g, '-')
     .replace(/\\+\//g, '/');
-  // RichFaces.ajax("formBuscador:repeat:N:jXXX", event, {"parameters":{...}})
-  const linkRe = /RichFaces\.ajax\("(formBuscador:repeat:(\d+):[^"]+)",event,\{"parameters":\{(.*?)\}\s*,/g;
+  // RichFaces.ajax("formBuscador:repeat:N:jXXX", event, {"parameters":{...}} ,"incId":"1"} )
+  // Anchor the params object on the trailing "incId" marker so a value that
+  // itself contains "}" (possible in a sumilla) can't terminate it early.
+  const linkRe = /RichFaces\.ajax\("(formBuscador:repeat:(\d+):[^"]+)",event,\{"parameters":\{([\s\S]*?)\}\s*,\s*"incId"/g;
   let m: RegExpExecArray | null;
   while ((m = linkRe.exec(text)) !== null) {
     if (!m[3].includes('"uuid"')) continue;
@@ -267,14 +281,14 @@ function parseJsfcljsParams(body: string): Record<string, string> {
 }
 
 /**
- * Parse a RichFaces parameters object body `"k":"v","k2":"v2"`, decoding the
- * escapes RichFaces emits: `-` (dash) and `\/` (slash). Values are HTML
- * entities that we also unescape (e.g. `&quot;` never appears inside, but
- * accented text arrives as raw UTF-8).
+ * Parse a parameters object body `"k":"v","k2":"v2"` into key/value pairs.
+ * A value ends at the *pair boundary* (`","` before the next key, or the end
+ * of the body), not at the first inner quote — so a value that itself
+ * contains a quote (legal sumillas quote statements) survives intact.
  */
 function parseJsfParams(body: string): Record<string, string> {
   const out: Record<string, string> = {};
-  const re = /"([^"]+)":"([^"]*)"/g;
+  const re = /"([^"]+)":"([\s\S]*?)"(?=\s*,\s*"|\s*$)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body)) !== null) {
     out[m[1]] = m[2].replace(/\s+/g, ' ').trim();

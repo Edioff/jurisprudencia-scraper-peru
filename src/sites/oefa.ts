@@ -55,6 +55,11 @@ export class OefaAdapter implements SiteAdapter {
   readonly name = 'oefa';
   readonly description = 'OEFA — Resoluciones del Tribunal de Fiscalización Ambiental';
   readonly baseUrl = 'https://publico.oefa.gob.pe';
+  /** The expediente number identifies every row; other columns can be blank. */
+  readonly requiredFields = ['numeroExpediente'] as const;
+  /** OEFA's download is a form POST that needs the row rendered in the
+   *  current view, so downloads run sequentially. */
+  readonly concurrentDownloads = false;
   readonly pagePath = '/repdig/consulta/consultaTfa.xhtml';
 
   async search(session: JsfSession): Promise<SearchResult> {

@@ -17,9 +17,12 @@ import { HttpClient } from './core/http-client';
 import { JsfSession, SessionExpiredError } from './core/jsf-session';
 import { log } from './core/logger';
 import { RetriesExhaustedError, withRetry, DEFAULT_RETRY } from './core/retry';
+import { mapLimit } from './core/concurrency';
+import { ProxyPool } from './core/proxy';
 import { sanitizeFileName } from './core/files';
 import { SiteAdapter } from './sites/adapter';
 import { StateStore } from './state';
+import { buildReport, writeAndPrintReport } from './report';
 import { DocumentRecord, ScraperOptions } from './types';
 
 /** Set by the SIGINT handler; checked between units of work. */
@@ -32,7 +35,7 @@ process.on('SIGINT', () => {
 
 export async function runScrape(adapter: SiteAdapter, opts: ScraperOptions): Promise<void> {
   const state = new StateStore(opts.outDir, adapter.name);
-  const session = new JsfSession(new HttpClient(adapter.baseUrl, opts.delayMs), adapter.pagePath);
+  const session = newSession(adapter, opts);
 
   log.info(`Site: ${adapter.description}`);
   log.info(`Output: ${path.resolve(opts.outDir)}`);
@@ -78,16 +81,39 @@ export async function runScrape(adapter: SiteAdapter, opts: ScraperOptions): Pro
     state.addDocuments(rows);
     log.info(`Page ${page + 1}/${totalPages}: ${rows.length} rows`);
 
+    // Defense in depth: a page that yields 0 rows while the corpus is
+    // non-empty is a transient error, not a real empty page. Don't mark it
+    // complete, so a later run re-fetches it instead of losing those docs.
+    // (Adapters also throw on this, but the guard covers any that don't.)
+    if (rows.length === 0 && search.totalRecords > 0) {
+      log.warn(`Page ${page + 1}/${totalPages}: 0 rows — not marking complete, will retry on re-run`);
+      state.save();
+      pagesThisRun++;
+      continue;
+    }
+
     // Only mark the page complete when the row loop ran to its natural end.
     let processedAllRows = true;
     if (!opts.skipPdfs) {
-      for (const row of rows) {
-        if (interrupted || (opts.maxDocs > 0 && docsThisRun >= opts.maxDocs)) {
-          processedAllRows = false;
-          break;
+      const concurrency = adapter.concurrentDownloads ? opts.concurrency : 1;
+      if (concurrency > 1) {
+        // Concurrent path: the site's downloads are stateless (no shared view
+        // state), so no session recovery — just retry each. maxDocs is a
+        // soft cap here (a page finishes before the next is checked).
+        const done = await mapLimit(rows, concurrency, (row) =>
+          downloadRow(session, adapter, row, state, opts, search.pageSize, false),
+        );
+        docsThisRun += done.filter(Boolean).length;
+        if (interrupted) processedAllRows = false;
+      } else {
+        for (const row of rows) {
+          if (interrupted || (opts.maxDocs > 0 && docsThisRun >= opts.maxDocs)) {
+            processedAllRows = false;
+            break;
+          }
+          const downloaded = await downloadRow(session, adapter, row, state, opts, search.pageSize, true);
+          if (downloaded) docsThisRun++;
         }
-        const downloaded = await downloadRow(session, adapter, row, state, opts, search.pageSize);
-        if (downloaded) docsThisRun++;
       }
     }
     if (opts.maxDocs > 0 && docsThisRun >= opts.maxDocs) {
@@ -102,10 +128,24 @@ export async function runScrape(adapter: SiteAdapter, opts: ScraperOptions): Pro
 
   state.save();
   summarize(state);
+  runReport(opts.outDir, adapter.requiredFields);
   if (interrupted) {
     log.warn('Run interrupted — state saved; re-run to resume where you left off.');
     process.exit(130);
   }
+}
+
+/** Construct a session with the site's HTTP client, wiring proxy rotation
+ *  when a proxies file was given (direct otherwise). */
+function newSession(adapter: SiteAdapter, opts: ScraperOptions): JsfSession {
+  const proxies = opts.proxiesFile ? ProxyPool.fromFile(opts.proxiesFile) : ProxyPool.empty();
+  return new JsfSession(new HttpClient(adapter.baseUrl, opts.delayMs, proxies), adapter.pagePath);
+}
+
+/** Build, persist and print the validation report for an output directory. */
+export function runReport(outDir: string, requiredFields: readonly string[] = []): void {
+  const report = buildReport(outDir, new Date().toISOString(), requiredFields);
+  writeAndPrintReport(outDir, report);
 }
 
 /** Re-process everything in the failed list (grouped by page to keep rows rendered). */
@@ -118,7 +158,7 @@ export async function retryFailed(adapter: SiteAdapter, opts: ScraperOptions): P
   }
   log.info(`Retrying ${failed.length} failed download(s)`);
 
-  const session = new JsfSession(new HttpClient(adapter.baseUrl, opts.delayMs), adapter.pagePath);
+  const session = newSession(adapter, opts);
   await session.init();
   const search = await adapter.search(session);
 
@@ -142,7 +182,7 @@ export async function retryFailed(adapter: SiteAdapter, opts: ScraperOptions): P
       if (interrupted) break;
       if (!targets.has(row.uuid) || state.isDownloaded(row.uuid)) continue;
       targets.delete(row.uuid);
-      await downloadRow(session, adapter, row, state, opts, search.pageSize);
+      await downloadRow(session, adapter, row, state, opts, search.pageSize, true);
     }
     // Rows recorded on this page but no longer found here: the result set
     // shifted since the failure. Keep them in the failed list and say so,
@@ -164,6 +204,9 @@ export async function retryFailed(adapter: SiteAdapter, opts: ScraperOptions): P
 /**
  * Download one row's PDF. Returns true on success.
  * On exhausted retries the failure is recorded and the scraper moves on.
+ * `recover` enables session re-establishment on view loss (sequential path);
+ * the concurrent path passes false since its downloads are stateless and
+ * re-establishing would mutate the session other tasks are using.
  */
 async function downloadRow(
   session: JsfSession,
@@ -172,6 +215,7 @@ async function downloadRow(
   state: StateStore,
   opts: ScraperOptions,
   pageSize: number,
+  recover: boolean,
 ): Promise<boolean> {
   if (!row.uuid) {
     log.debug(`Row ${row.rowIndex}: no PDF link, metadata only`);
@@ -204,17 +248,20 @@ async function downloadRow(
     withRetry(() => attempt(target), { ...DEFAULT_RETRY, maxAttempts: opts.maxAttempts, label });
 
   try {
-    const fileName = await withSessionRecovery(
-      () => attemptWithRetry(row),
-      async () => {
-        const fresh = await reestablish(session, adapter, state, row.page, pageSize);
-        // Match strictly by uuid: row indexes shift if the result set changed,
-        // and downloading the wrong document would be worse than failing.
-        const replacement = fresh.find((r) => r.uuid === row.uuid);
-        if (replacement) Object.assign(row, replacement);
-      },
-      label,
-    );
+    const fileName = recover
+      ? await withSessionRecovery(
+          () => attemptWithRetry(row),
+          async () => {
+            const fresh = await reestablish(session, adapter, state, row.page, pageSize);
+            // Match strictly by uuid: row indexes shift if the result set
+            // changed, and downloading the wrong document would be worse
+            // than failing.
+            const replacement = fresh.find((r) => r.uuid === row.uuid);
+            if (replacement) Object.assign(row, replacement);
+          },
+          label,
+        )
+      : await attemptWithRetry(row);
     state.recordDownload(row, fileName);
     log.info(`  ✓ ${fileName} (${state.downloadedCount} total)`);
     return true;

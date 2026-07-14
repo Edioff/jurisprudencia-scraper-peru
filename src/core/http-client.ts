@@ -13,6 +13,7 @@ import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { CookieJar } from './cookie-jar';
 import { sleep } from './retry';
 import { log } from './logger';
+import { ProxyPool } from './proxy';
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -33,13 +34,15 @@ function withoutEntityHeaders(
 export class HttpClient {
   private readonly axios: AxiosInstance;
   readonly jar = new CookieJar();
-  private lastRequestAt = 0;
+  private nextSlotAt = 0;
   private readonly secure: boolean;
 
   constructor(
     baseUrl: string,
     /** Minimum spacing between requests, in ms. */
     private readonly delayMs: number,
+    /** Optional proxy rotation; defaults to going direct. */
+    private readonly proxies: ProxyPool = ProxyPool.empty(),
   ) {
     this.secure = baseUrl.startsWith('https://');
     this.axios = axios.create({
@@ -56,11 +59,18 @@ export class HttpClient {
     });
   }
 
-  /** Space requests out so we never hammer the server. */
+  /**
+   * Space request *starts* by at least `delayMs`, even when several requests
+   * run concurrently. Each caller reserves the next time slot synchronously
+   * (JS is single-threaded, so the read+write of `nextSlotAt` is atomic),
+   * which serializes starts without serializing the in-flight requests.
+   */
   private async politeWait(): Promise<void> {
-    const elapsed = Date.now() - this.lastRequestAt;
-    if (elapsed < this.delayMs) await sleep(this.delayMs - elapsed);
-    this.lastRequestAt = Date.now();
+    const now = Date.now();
+    const startAt = Math.max(now, this.nextSlotAt);
+    this.nextSlotAt = startAt + this.delayMs;
+    const wait = startAt - now;
+    if (wait > 0) await sleep(wait);
   }
 
   /**
@@ -71,7 +81,11 @@ export class HttpClient {
   private async request(config: AxiosRequestConfig): Promise<AxiosResponse<Buffer>> {
     await this.politeWait();
 
-    let current: AxiosRequestConfig = { ...config, responseType: 'arraybuffer' };
+    // Rotate one proxy per logical request (kept across its redirect hops).
+    // `false` disables axios' env-var proxy when we're going direct.
+    const proxy = this.proxies.next() ?? false;
+
+    let current: AxiosRequestConfig = { ...config, responseType: 'arraybuffer', proxy };
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const cookie = this.jar.header();
       current.headers = { ...current.headers, ...(cookie ? { Cookie: cookie } : {}) };
@@ -97,6 +111,7 @@ export class HttpClient {
           headers: withoutEntityHeaders(config.headers as Record<string, string> | undefined),
           responseType: 'arraybuffer',
           timeout: current.timeout,
+          proxy, // keep the same proxy across the redirect chain
         };
         continue;
       }

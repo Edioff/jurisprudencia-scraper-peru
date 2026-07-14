@@ -164,13 +164,12 @@ export class JsfSession {
     return html;
   }
 
-  /** Retried GET returning the raw bytes — used by adapters whose file
-   *  downloads are plain resource URLs (e.g. PJ's ServletDescarga). */
+  /** Plain GET returning the raw bytes — used by adapters whose file
+   *  downloads are resource URLs (e.g. PJ's ServletDescarga). Not retried
+   *  here: the orchestrator owns download retry + the record-and-continue
+   *  policy, so a single retry layer wraps every download. */
   async get(path: string, timeoutMs = 180_000): Promise<AxiosResponse<Buffer>> {
-    return withRetry(() => this.http.get(path, timeoutMs), {
-      ...DEFAULT_RETRY,
-      label: `GET ${path}`,
-    });
+    return this.http.get(path, timeoutMs);
   }
 }
 

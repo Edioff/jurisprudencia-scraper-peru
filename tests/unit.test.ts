@@ -25,6 +25,8 @@ import {
   RetriesExhaustedError,
 } from '../src/core/retry';
 import { CookieJar } from '../src/core/cookie-jar';
+import { mapLimit } from '../src/core/concurrency';
+import { parseProxyUrl, ProxyPool } from '../src/core/proxy';
 import { sanitizeFileName, toCsv, fileNameFromDisposition } from '../src/core/files';
 import {
   SEARCH_FRAGMENT,
@@ -134,6 +136,18 @@ test('PJ: rowIndex tracks the RichFaces repeat index across pages', () => {
   const page2 = PJ_RESULT_LINK.replace(/repeat:0/g, 'repeat:13');
   const rows = parsePjResults(page2, 1);
   assert.equal(rows[0].rowIndex, 13);
+});
+
+test('PJ: a value containing quotes is not truncated', () => {
+  // A sumilla that quotes a phrase: the escaped inner quotes (\") survive the
+  // unescape and must not end the value early.
+  const withQuotes = PJ_RESULT_LINK.replace(
+    'En el caso, solo los argumentos.',
+    'El tribunal dijo \\\\&quot;no ha lugar\\\\&quot; y cerró.',
+  );
+  const rows = parsePjResults(withQuotes, 0);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].fields.sumilla, 'El tribunal dijo "no ha lugar" y cerró.');
 });
 
 test('PJ: parses two results from a page fragment', () => {
@@ -278,4 +292,41 @@ test('Content-Disposition file name extraction', () => {
   assert.equal(fileNameFromDisposition('attachment;filename=doc.pdf;size=1'), 'doc.pdf');
   // RFC 5987 percent-encoded
   assert.equal(fileNameFromDisposition("attachment;filename*=UTF-8''Re%20236.pdf"), 'Re 236.pdf');
+});
+
+// ---------------------------------------------------------------------------
+// concurrency + proxy
+
+test('mapLimit preserves order and respects the concurrency cap', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const out = await mapLimit([1, 2, 3, 4, 5, 6], 2, async (x) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+    return x * 10;
+  });
+  assert.deepEqual(out, [10, 20, 30, 40, 50, 60]); // input order preserved
+  assert.ok(peak <= 2, `peak concurrency ${peak} exceeded cap 2`);
+});
+
+test('parseProxyUrl parses host, port and credentials', () => {
+  assert.deepEqual(parseProxyUrl('http://10.0.0.2:3128'), {
+    host: '10.0.0.2',
+    port: 3128,
+    protocol: 'http',
+  });
+  assert.deepEqual(parseProxyUrl('http://user:pass@10.0.0.1:8080'), {
+    host: '10.0.0.1',
+    port: 8080,
+    protocol: 'http',
+    auth: { username: 'user', password: 'pass' },
+  });
+});
+
+test('ProxyPool round-robins and an empty pool goes direct', () => {
+  const pool = ProxyPool.empty();
+  assert.equal(pool.enabled, false);
+  assert.equal(pool.next(), null);
 });

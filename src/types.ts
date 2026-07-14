@@ -67,5 +67,9 @@ export interface ScraperOptions {
   skipPdfs: boolean;
   /** Max attempts per download before recording it as failed. */
   maxAttempts: number;
+  /** Max concurrent PDF downloads (only applied when the adapter allows it). */
+  concurrency: number;
+  /** Optional file of proxy URLs to rotate through (empty = direct). */
+  proxiesFile: string;
   verbose: boolean;
 }

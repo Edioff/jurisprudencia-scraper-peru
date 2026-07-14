@@ -10,27 +10,32 @@
  *        --attempts <n> --skip-pdfs --verbose
  */
 
+import { join } from 'path';
 import { log, setLogLevel } from './core/logger';
-import { runScrape, retryFailed } from './scraper';
+import { readJsonIfExists } from './core/files';
+import { runScrape, retryFailed, runReport } from './scraper';
 import { getAdapter, listAdapters } from './sites';
 import { ScraperOptions } from './types';
 
 const USAGE = `
-Usage: npm run scrape -- [flags] | npm run retry-failed -- [flags]
+Usage: npm run scrape -- [flags] | npm run retry-failed -- [flags] | npm run report -- [flags]
 
 Commands:
   scrape          Extract all documents and download their PDFs
   retry-failed    Reprocess downloads recorded as failed in state.json
+  report          Validate an existing output directory (sanity-check report)
 
 Flags:
   --site <name>    Site adapter to use (default: oefa). Available: ${listAdapters()
     .map((a) => a.name)
     .join(', ')}
   --out <dir>      Output directory (default: ./output)
-  --delay <ms>     Politeness delay between requests (default: 600)
+  --delay <ms>     Politeness delay between request starts (default: 600)
   --max-pages <n>  Process at most n result pages this run (default: all)
   --max-docs <n>   Download at most n PDFs this run (default: unlimited)
   --attempts <n>   Max attempts per download before recording failure (default: 5)
+  --concurrency <n> Parallel PDF downloads, where the site allows it (default: 1)
+  --proxies <file> Rotate through proxy URLs listed in <file>, one per line (default: direct)
   --skip-pdfs      Extract metadata only, skip PDF downloads
   --verbose        Debug logging
 `;
@@ -45,6 +50,8 @@ function parseArgs(argv: string[]): { command: string; opts: ScraperOptions } {
     maxDocs: 0,
     skipPdfs: false,
     maxAttempts: 5,
+    concurrency: 1,
+    proxiesFile: '',
     verbose: false,
   };
 
@@ -74,6 +81,12 @@ function parseArgs(argv: string[]): { command: string; opts: ScraperOptions } {
       case '--attempts':
         opts.maxAttempts = Math.max(1, parsePositiveInt(flag, next()));
         break;
+      case '--concurrency':
+        opts.concurrency = Math.max(1, parsePositiveInt(flag, next()));
+        break;
+      case '--proxies':
+        opts.proxiesFile = next();
+        break;
       case '--skip-pdfs':
         opts.skipPdfs = true;
         break;
@@ -96,6 +109,15 @@ function parsePositiveInt(flag: string, value: string): number {
 async function main(): Promise<void> {
   const { command, opts } = parseArgs(process.argv.slice(2));
   if (opts.verbose) setLogLevel('debug');
+
+  // `report` reads an existing output dir; resolve the site from its state so
+  // the right identity fields are checked regardless of the --site flag.
+  if (command === 'report') {
+    const state = readJsonIfExists<{ site: string }>(join(opts.outDir, 'state.json'));
+    const required = state ? getAdapter(state.site).requiredFields : [];
+    runReport(opts.outDir, required);
+    return;
+  }
 
   const adapter = getAdapter(opts.site);
 

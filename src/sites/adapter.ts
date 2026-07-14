@@ -35,6 +35,21 @@ export interface SiteAdapter {
   readonly baseUrl: string;
   /** Page the session GETs and POSTs against. */
   readonly pagePath: string;
+  /**
+   * Identity metadata fields that every document must have. The validation
+   * report treats less-than-full coverage of these as a warning (a likely
+   * parsing regression), while other fields may legitimately be sparse.
+   */
+  readonly requiredFields: readonly string[];
+
+  /**
+   * Whether a row's PDF download is safe to run concurrently within one
+   * session. True only when the download is a self-contained request that
+   * doesn't depend on mutable session/view state — e.g. PJ's stateless
+   * `ServletDescarga?uuid=` GET. OEFA's download is a form POST that needs
+   * the row rendered in the current view, so it stays sequential.
+   */
+  readonly concurrentDownloads: boolean;
 
   /**
    * Run the initial search that exposes the full result set
