@@ -8,7 +8,12 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { AxiosError, AxiosResponse } from 'axios';
+
+import { buildReport } from '../src/report';
 
 import { parsePartialResponse } from '../src/core/jsf-session';
 import { OefaAdapter } from '../src/sites/oefa';
@@ -329,4 +334,44 @@ test('ProxyPool round-robins and an empty pool goes direct', () => {
   const pool = ProxyPool.empty();
   assert.equal(pool.enabled, false);
   assert.equal(pool.next(), null);
+});
+
+// ---------------------------------------------------------------------------
+// validation report
+
+function writeRun(docs: DocumentRecord[], totalRecords: number): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scraper-report-'));
+  fs.mkdirSync(path.join(dir, 'pdfs'));
+  fs.writeFileSync(
+    path.join(dir, 'state.json'),
+    JSON.stringify({ site: 'pj', totalRecords, completedPages: [0], downloaded: {}, failed: [], updatedAt: '' }),
+  );
+  fs.writeFileSync(path.join(dir, 'documents.json'), JSON.stringify(docs));
+  return dir;
+}
+
+test('report: a required field missing on all documents is flagged', () => {
+  // recurso parsed fine, but nroexp is absent everywhere (a parsing regression).
+  const docs: DocumentRecord[] = [
+    { uuid: 'a', rowIndex: 0, page: 0, fields: { recurso: 'Casación' }, downloadButtonId: 'x' },
+    { uuid: 'b', rowIndex: 1, page: 0, fields: { recurso: 'Apelación' }, downloadButtonId: 'y' },
+  ];
+  const report = buildReport(writeRun(docs, 100), '2026-07-14T00:00:00Z', ['recurso', 'nroexp']);
+  assert.ok(report.warnings.some((w) => w.includes('nroexp') && w.includes('0%')));
+  assert.ok(!report.warnings.some((w) => w.includes('recurso'))); // recurso is 100%, no warning
+  assert.equal(report.ok, false);
+});
+
+test('report: clean run has no warnings and flags duplicate uuids', () => {
+  const good: DocumentRecord[] = [
+    { uuid: 'a', rowIndex: 0, page: 0, fields: { recurso: 'C', nroexp: '1' }, downloadButtonId: 'x' },
+  ];
+  assert.equal(buildReport(writeRun(good, 100), 'now', ['recurso', 'nroexp']).ok, true);
+
+  const dup: DocumentRecord[] = [
+    { uuid: 'a', rowIndex: 0, page: 0, fields: { recurso: 'C', nroexp: '1' }, downloadButtonId: 'x' },
+    { uuid: 'a', rowIndex: 1, page: 0, fields: { recurso: 'C', nroexp: '2' }, downloadButtonId: 'y' },
+  ];
+  const report = buildReport(writeRun(dup, 100), 'now', ['recurso', 'nroexp']);
+  assert.ok(report.warnings.some((w) => w.includes('duplicate uuid')));
 });

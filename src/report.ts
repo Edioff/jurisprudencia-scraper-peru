@@ -86,10 +86,12 @@ export function buildReport(
   }
   // Only identity fields warrant a warning when incomplete — other columns
   // (a sumilla, a keyword list) are legitimately absent on many documents.
+  // A field missing from *every* document has no coverage entry at all; that
+  // is the worst case (a total parsing regression), so treat absent as 0%.
   for (const field of requiredFields) {
-    const c = metadataCoverage.find((x) => x.field === field);
-    if (docs.length > 0 && c && c.pct < 100) {
-      warnings.push(`identity field "${field}" present on only ${c.pct}% of documents (parsing issue?)`);
+    const coverage = metadataCoverage.find((x) => x.field === field)?.pct ?? 0;
+    if (docs.length > 0 && coverage < 100) {
+      warnings.push(`identity field "${field}" present on only ${coverage}% of documents (parsing issue?)`);
     }
   }
   if (state.failed.length > 0) {
