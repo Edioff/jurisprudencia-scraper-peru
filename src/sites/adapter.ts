@@ -12,7 +12,7 @@
  */
 
 import { JsfSession } from '../core/jsf-session';
-import { DocumentRecord } from '../types';
+import { DocumentRecord, FichaDetail } from '../types';
 
 export interface SearchResult {
   totalRecords: number;
@@ -66,10 +66,11 @@ export interface SiteAdapter {
    * view with ~40 (judges, chamber, procedural history…) — the challenge asks
    * for *all* available information, so adapters expose it here. Must run
    * while the row's page is the current view (it's a stateful AJAX call), so
-   * the orchestrator calls it sequentially per page. Adapters whose list is
-   * already complete (OEFA) omit this.
+   * the orchestrator calls it sequentially per page. The detail is grouped by
+   * the modal's sections. Adapters whose list is already complete (OEFA) omit
+   * this.
    */
-  fetchDetail?(session: JsfSession, row: DocumentRecord): Promise<Record<string, string>>;
+  fetchDetail?(session: JsfSession, row: DocumentRecord): Promise<FichaDetail>;
 
   /**
    * Fetch a row's PDF. The adapter owns the transport (a JSF form POST for

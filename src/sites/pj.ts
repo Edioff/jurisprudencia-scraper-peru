@@ -23,8 +23,9 @@
  *    streams the PDF (`Content-Disposition: attachment`). No arming needed.
  */
 
+import * as cheerio from 'cheerio';
 import { JsfSession, SessionExpiredError } from '../core/jsf-session';
-import { DocumentRecord } from '../types';
+import { DocumentRecord, FichaDetail } from '../types';
 import { PdfDownload, SearchResult, SiteAdapter } from './adapter';
 import { fileNameFromDisposition, sanitizeFileName } from '../core/files';
 import { log } from '../core/logger';
@@ -41,6 +42,19 @@ const PAGE_SIZE = 10;
 const FICHA_ECHO_KEYS: readonly string[] = [
   'recurso', 'nroexp', 'palabras', 'pretensiones', 'normaDI',
   'tipoResolucion', 'fechaResolucion', 'sala', 'sumilla',
+];
+
+/**
+ * The three section headers the ficha modal is organized into. Matched by
+ * their heading text (accent-tolerant) rather than a fixed markup shape, so a
+ * label/value pair is filed under whichever section header precedes it. Pairs
+ * before any known header — or after an unexpected one — fall into `extra`, so
+ * nothing is lost even if a document's modal doesn't follow the usual layout.
+ */
+const FICHA_SECTIONS: ReadonlyArray<{ key: keyof FichaDetail; re: RegExp }> = [
+  { key: 'resolucion', re: /DATOS\s+DE\s+LA\s+RESOLUCI[OÓ]N/i },
+  { key: 'proceso', re: /DATOS\s+DEL\s+PROCESO/i },
+  { key: 'procedencia', re: /DATOS\s+DE\s+PROCEDENCIA/i },
 ];
 
 /** The site phrases the count a few ways ("De un total de N resultados",
@@ -136,8 +150,8 @@ export class PjAdapter implements SiteAdapter {
    * on the flaky server's ViewExpired we restore the page (re-paginate) and
    * retry rather than losing the detail.
    */
-  async fetchDetail(session: JsfSession, row: DocumentRecord): Promise<Record<string, string>> {
-    if (!row.downloadButtonId || !row.uuid) return {};
+  async fetchDetail(session: JsfSession, row: DocumentRecord): Promise<FichaDetail> {
+    if (!row.downloadButtonId || !row.uuid) return emptyDetail();
     const btn = row.downloadButtonId;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -157,7 +171,7 @@ export class PjAdapter implements SiteAdapter {
         await this.fetchPage(session, row.page, PAGE_SIZE);
       }
     }
-    return {};
+    return emptyDetail();
   }
 
   pdfFileName(row: DocumentRecord, serverFileName: string | null): string {
@@ -261,27 +275,64 @@ function fichaParams(row: DocumentRecord, btn: string): Record<string, string> {
 }
 
 /**
- * Parse the detail modal's HTML into fields. Each row is
+ * Parse the detail modal's HTML into its three sections. Each field is
  *   <div class="...txtbold...">Label:</div>
  *   <div class="...marginb2..."><span class="data">Value</span></div>
- * so we pair every bold label with the value box that follows it. Section
- * headers (no value box) and the `***` prefixes are dropped.
+ * so we pair every bold label with the value box that follows it, and file the
+ * pair under whichever section header (DATOS DE LA RESOLUCIÓN / DEL PROCESO /
+ * DE PROCEDENCIA) most recently preceded it in the document.
+ *
+ * This is deliberately structure-agnostic: it captures whatever labels a modal
+ * actually presents (grouping by position), so a document that omits a field,
+ * adds one, or renders an unfamiliar section neither breaks parsing nor loses
+ * data — stray pairs land in `extra`. The `***` role prefixes and the section
+ * headers themselves (which have no value box) are dropped.
  */
-export function parseFicha(modalHtml: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  const re =
-    /<div class="[^"]*txtbold[^"]*"[^>]*>([^<]+?)\s*<\/div>\s*<div class="[^"]*marginb2[^"]*"[^>]*>([\s\S]*?)<\/div>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(modalHtml)) !== null) {
-    const label = m[1].replace(/\*+/g, '').replace(/:\s*$/, '').replace(/\s+/g, ' ').trim();
-    const value = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-    const key = slug(label);
-    // A few labels repeat across the modal's sections (e.g. "Tipo de
-    // Resolución"). Keep the first non-empty value so a later blank one in
-    // another section can't clobber real data.
-    if (key && (!(key in out) || (out[key] === '' && value !== ''))) out[key] = value;
-  }
-  return out;
+export function parseFicha(modalHtml: string): FichaDetail {
+  const detail = emptyDetail();
+  const $ = cheerio.load(modalHtml);
+  let section: keyof FichaDetail = 'extra';
+  let label: string | null = null;
+
+  // Walk every element in document order. Labels and values are the `txtbold` /
+  // `marginb2` divs; a section header is any element whose own text is one of
+  // the three titles. Values are read with `.text()`, which includes the text
+  // of any nested markup — so a value wrapped in extra elements is captured in
+  // full (a regex up to the first `</div>` would silently truncate it).
+  $('body *').each((_i, el) => {
+    const $el = $(el);
+    const cls = $el.attr('class') ?? '';
+
+    if (/(^|\s)txtbold(\s|$)/.test(cls)) {
+      label = $el.text().replace(/\*+/g, '').replace(/:\s*$/, '').replace(/\s+/g, ' ').trim();
+      return;
+    }
+    if (/(^|\s)marginb2(\s|$)/.test(cls)) {
+      if (label !== null) {
+        const key = slug(label);
+        const value = $el.text().replace(/\s+/g, ' ').trim();
+        const bucket = detail[section];
+        // Within a section a label could still repeat; keep the first non-empty
+        // value so a later blank one can't clobber real data.
+        if (key && (!(key in bucket) || (bucket[key] === '' && value !== ''))) bucket[key] = value;
+      }
+      label = null;
+      return;
+    }
+    // Section header: match on the element's OWN text (children removed) so a
+    // container that merely wraps a header isn't mistaken for one.
+    const own = $el.clone().children().remove().end().text().replace(/\s+/g, ' ').trim();
+    const header = FICHA_SECTIONS.find((s) => s.re.test(own));
+    if (header) {
+      section = header.key;
+      label = null;
+    }
+  });
+  return detail;
+}
+
+function emptyDetail(): FichaDetail {
+  return { resolucion: {}, proceso: {}, procedencia: {}, extra: {} };
 }
 
 /** "N° de Expediente de la Sala Superior" -> "nroDeExpedienteDeLaSalaSuperior". */

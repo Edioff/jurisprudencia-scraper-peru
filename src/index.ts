@@ -10,10 +10,9 @@
  *        --attempts <n> --skip-pdfs --verbose
  */
 
-import { join } from 'path';
 import { log, setLogLevel } from './core/logger';
-import { readJsonIfExists } from './core/files';
 import { runScrape, retryFailed, runReport } from './scraper';
+import { StateStore } from './state';
 import { getAdapter, listAdapters } from './sites';
 import { ScraperOptions } from './types';
 
@@ -22,8 +21,10 @@ Usage: npm run scrape -- [flags] | npm run retry-failed -- [flags] | npm run rep
 
 Commands:
   scrape          Extract all documents and download their PDFs
-  retry-failed    Reprocess downloads recorded as failed in state.json
+  retry-failed    Reprocess downloads recorded as failed (pdf_status='failed')
+  export          Regenerate documents.json / .csv / state.json from the database
   report          Validate an existing output directory (sanity-check report)
+  verify          Alias for report (coverage, PDF-on-disk, pending/failed)
 
 Flags:
   --site <name>    Site adapter to use (default: oefa). Available: ${listAdapters()
@@ -35,6 +36,7 @@ Flags:
   --max-docs <n>   Download at most n PDFs this run (default: unlimited)
   --attempts <n>   Max attempts per download before recording failure (default: 5)
   --concurrency <n> Parallel PDF downloads, where the site allows it (default: 1)
+  --page-concurrency <n> Parallel pagination via n independent sessions (default: 1)
   --proxies <file> Rotate through proxy URLs listed in <file>, one per line (default: direct)
   --skip-details   Skip the per-document detail (ficha) fetch, keep list metadata only
   --skip-pdfs      Extract metadata only, skip PDF downloads
@@ -52,6 +54,7 @@ function parseArgs(argv: string[]): { command: string; opts: ScraperOptions } {
     skipPdfs: false,
     maxAttempts: 5,
     concurrency: 1,
+    pageConcurrency: 1,
     proxiesFile: '',
     skipDetails: false,
     verbose: false,
@@ -86,6 +89,9 @@ function parseArgs(argv: string[]): { command: string; opts: ScraperOptions } {
       case '--concurrency':
         opts.concurrency = Math.max(1, parsePositiveInt(flag, next()));
         break;
+      case '--page-concurrency':
+        opts.pageConcurrency = Math.max(1, parsePositiveInt(flag, next()));
+        break;
       case '--proxies':
         opts.proxiesFile = next();
         break;
@@ -115,12 +121,23 @@ async function main(): Promise<void> {
   const { command, opts } = parseArgs(process.argv.slice(2));
   if (opts.verbose) setLogLevel('debug');
 
-  // `report` reads an existing output dir; resolve the site from its state so
-  // the right identity fields are checked regardless of the --site flag.
-  if (command === 'report') {
-    const state = readJsonIfExists<{ site: string }>(join(opts.outDir, 'state.json'));
-    const required = state ? getAdapter(state.site).requiredFields : [];
-    runReport(opts.outDir, required);
+  // `export`, `report` and `verify` operate on an existing output directory;
+  // resolve the site from the database so the right adapter (and identity
+  // fields) is used regardless of the --site flag. `verify` is an alias for
+  // `report`.
+  if (command === 'export' || command === 'report' || command === 'verify') {
+    const site = StateStore.siteOf(opts.outDir);
+    if (!site) {
+      log.error(`No database found in ${opts.outDir} — run a scrape first.`);
+      process.exitCode = 1;
+      return;
+    }
+    const adapter = getAdapter(site);
+    const state = new StateStore(opts.outDir, site, { hasDetail: !!adapter.fetchDetail });
+    const { documents } = state.exportArtifacts();
+    state.close();
+    log.info(`Exported ${documents} documents to documents.json / documents.csv / state.json`);
+    if (command === 'report' || command === 'verify') runReport(opts.outDir, adapter.requiredFields);
     return;
   }
 

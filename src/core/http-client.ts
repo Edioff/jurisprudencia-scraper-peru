@@ -31,19 +31,45 @@ function withoutEntityHeaders(
   );
 }
 
+/**
+ * Spaces request *starts* by at least `delayMs`, even when many requests run
+ * concurrently. Each caller reserves the next time slot synchronously (JS is
+ * single-threaded, so the read+write of `nextSlotAt` is atomic), which
+ * serializes starts without serializing the in-flight requests.
+ *
+ * One instance can be shared across several HttpClients so that N parallel
+ * sessions still hit the server at one global, polite rate — not N× the rate.
+ */
+export class RateLimiter {
+  private nextSlotAt = 0;
+
+  constructor(private readonly delayMs: number) {}
+
+  async wait(): Promise<void> {
+    const now = Date.now();
+    const startAt = Math.max(now, this.nextSlotAt);
+    this.nextSlotAt = startAt + this.delayMs;
+    const delay = startAt - now;
+    if (delay > 0) await sleep(delay);
+  }
+}
+
 export class HttpClient {
   private readonly axios: AxiosInstance;
   readonly jar = new CookieJar();
-  private nextSlotAt = 0;
+  private readonly limiter: RateLimiter;
   private readonly secure: boolean;
 
   constructor(
     baseUrl: string,
     /** Minimum spacing between requests, in ms. */
-    private readonly delayMs: number,
+    delayMs: number,
     /** Optional proxy rotation; defaults to going direct. */
     private readonly proxies: ProxyPool = ProxyPool.empty(),
+    /** Optional shared limiter so several clients share one polite rate. */
+    limiter?: RateLimiter,
   ) {
+    this.limiter = limiter ?? new RateLimiter(delayMs);
     this.secure = baseUrl.startsWith('https://');
     this.axios = axios.create({
       baseURL: baseUrl,
@@ -60,26 +86,12 @@ export class HttpClient {
   }
 
   /**
-   * Space request *starts* by at least `delayMs`, even when several requests
-   * run concurrently. Each caller reserves the next time slot synchronously
-   * (JS is single-threaded, so the read+write of `nextSlotAt` is atomic),
-   * which serializes starts without serializing the in-flight requests.
-   */
-  private async politeWait(): Promise<void> {
-    const now = Date.now();
-    const startAt = Math.max(now, this.nextSlotAt);
-    this.nextSlotAt = startAt + this.delayMs;
-    const wait = startAt - now;
-    if (wait > 0) await sleep(wait);
-  }
-
-  /**
    * Perform a request, following redirects manually (cookies captured on
    * every hop) and turning HTTP errors into axios-style thrown errors so
    * the retry layer can classify them.
    */
   private async request(config: AxiosRequestConfig): Promise<AxiosResponse<Buffer>> {
-    await this.politeWait();
+    await this.limiter.wait();
 
     // Rotate one proxy per logical request (kept across its redirect hops).
     // `false` disables axios' env-var proxy when we're going direct.
