@@ -41,4 +41,13 @@ recon-pj.sh
 !sample/documents.csv
 !sample/state.json
 !sample/report.json
-sample/pdfs/
+
+# A full run downloads hundreds of PDFs into sample/pdfs/ (~72 MB) — too heavy
+# to commit. We keep a handful of REAL ones so a reviewer can open them and
+# confirm the download path works end to end. Everything else stays ignored.
+sample/pdfs/*
+!sample/pdfs/Apelación-000169-2025__Resolucion_10_20260708160131000621498.pdf
+!sample/pdfs/Apelación-000373-2025__Resolucion_10_20260708142912000031643.pdf
+!sample/pdfs/Apelación-000389-2025__Resolucion_10_20260708131423000722299.pdf
+!sample/pdfs/Apelación-000474-2025__Resolucion_10_2026070812291100073954.pdf
+!sample/pdfs/Apelación-001231-2025__Resolucion_12_20260701151627000909781.pdf

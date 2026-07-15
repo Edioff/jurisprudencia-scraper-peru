@@ -30,6 +30,11 @@ núcleo de los *adapters*.
   necesitas compilador).
 - Dependencias de runtime: `axios`, `cheerio`, `better-sqlite3`.
 - Dependencias de desarrollo: `typescript`, `ts-node`, tipos.
+- **Solo para `--site pj`: salida a internet por IP peruana.** El sitio del PJ
+  está geo-bloqueado fuera de Perú. Yo desarrollé y probé todo con **NordVPN**
+  conectado a un servidor de Perú, pero sirve cualquier VPN o proxy con salida
+  peruana: el bloqueo es puramente geográfico, no hay anti-bot por IP (ver
+  [En producción](#en-producción)). OEFA no necesita nada de esto.
 
 ```bash
 npm install
@@ -289,10 +294,16 @@ output/
 Como PJ está geo-bloqueado a Perú y quien revise puede no tener VPN, el repo
 incluye una **muestra real de PJ** en `sample/`: la base `documents.db` (200
 documentos con su ficha completa de ~40 campos), más los exports
-`documents.json` / `.csv`, `state.json` y `report.json`. Los PDFs no se
-versionan (pesan), pero sus nombres quedan referenciados en la data. Ábrela con
+`documents.json` / `.csv`, `state.json` y `report.json`. Ábrela con
 [DB Browser for SQLite](https://sqlitebrowser.org) para ver el resultado sin
 correr nada.
+
+De los PDFs, la corrida completa descargó los 200 (así lo confirma
+`report.json`), pero versionarlos todos serían ~72 MB de binarios en git, así
+que **intencionalmente se commitearon solo 5** en `sample/pdfs/` — suficientes
+para abrirlos y comprobar que la descarga funciona de punta a punta y que el
+nombre descriptivo (`{recurso}-{expediente}__{archivo}.pdf`) es real. El resto
+queda excluido por `.gitignore`.
 
 ---
 
