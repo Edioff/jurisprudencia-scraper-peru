@@ -19,12 +19,17 @@ export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-/** Write JSON atomically (tmp + rename) so a crash never corrupts state. */
-export function writeJsonAtomic(filePath: string, data: unknown): void {
+/** Write a file atomically (tmp + rename) so a crash never corrupts it. */
+export function writeTextAtomic(filePath: string, text: string): void {
   ensureDir(path.dirname(filePath));
   const tmp = `${filePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  fs.writeFileSync(tmp, text, 'utf-8');
   fs.renameSync(tmp, filePath);
+}
+
+/** Write JSON atomically (tmp + rename) so a crash never corrupts state. */
+export function writeJsonAtomic(filePath: string, data: unknown): void {
+  writeTextAtomic(filePath, JSON.stringify(data, null, 2));
 }
 
 export function readJsonIfExists<T>(filePath: string): T | null {

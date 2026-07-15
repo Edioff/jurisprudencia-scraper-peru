@@ -1,0 +1,143 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<partial-response><changes><update id="formBuscador:popupResolucion"><![CDATA[<div id="formBuscador:popupResolucion" style="visibility: hidden;"><div class="rf-pp-shade" id="formBuscador:popupResolucion_shade" style="z-index:100;"><button class="rf-pp-btn" id="formBuscador:popupResolucionFirstHref"></button></div><div class="rf-pp-cntr " id="formBuscador:popupResolucion_container" style="position: fixed; z-index:100; "><div class="rf-pp-shdw" id="formBuscador:popupResolucion_shadow"></div><div class="rf-pp-hdr " id="formBuscador:popupResolucion_header"><div class="rf-pp-hdr-cnt" id="formBuscador:popupResolucion_header_content"><span style="font-weight:bold">Casación - 001785-2024</span></div></div><div class="rf-pp-hdr-cntrls " id="formBuscador:popupResolucion_header_controls"><a href="#" onclick="RichFaces.$('formBuscador:popupResolucion').hide(); return false;" style="color: #AA0202; font-size:17px;">
+							                X
+							            </a></div><div class="rf-pp-cnt-scrlr" id="formBuscador:popupResolucion_content_scroller"><div class="rf-pp-cnt" id="formBuscador:popupResolucion_content">  
+											        	        
+											        
+											<div class="panel panel-gris">
+                                              <div class="panel-heading"><div class="txtbold">DATOS DE LA RESOLUCIÓN:</div></div>
+                                              <div class="panel-body">
+                                                <div class="row marginb">
+                                                    <div class="col-sm-6 txtbold">Fecha de la Resolución: </div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">09/07/2026</span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Tipo de Resolución: </div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">Ejecutoria Suprema</span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Fallo/Sentido de la Resolución:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">Bien Concedido</span></div>                                                 
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Jueces Supremos:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">CAMPOS BARRANZUELA, PRADO SALDARRIAGA, PEÑA FARFAN, LUJAN TUPEZ, ALTABAS KAJATT DE MILLA</span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">*** Ponente:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">ALTABAS KAJATT DE MILLA</span></div>  
+                                                    
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">*** Dirimente:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div> 
+                                                    
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">*** Discordia:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div> 
+                                                    
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">*** Voto Concordado:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div> 
+                                                    
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">*** Fundamentos Adicionales:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                                                                   
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Sumilla:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">En el caso, solo los argumentos desplegados en la causal 1 del artículo 429 del Código Procesal Penal ameritan su admisibilidad ante este Supremo Tribunal, pues lo cuestionado se encuentra vinculado con una infracción de precepto constitucional referido al debido proceso y la tutela jurisdiccional efectiva.  Por lo que, al existir la justificación correspondiente, de conformidad con el numeral 6 del artículo 430 del CPP, el recurso de casación debe ser admitido solo por la referida causal.
+Empero, la segunda causal debe ser desestimada, al incidir lo cuestionado en la responsabilidad penal del imputado, lo cual es competencia exclusiva del representante de la legalidad (en virtud del principio acusatorio), por lo que a la parte perjudicada solo le corresponde formular pretensiones relacionadas con la reparación civil.
+</span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Norma de Derecho Interno:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Jurisprudencia Nacional/Acuerdo Plenario:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Norma de Derecho Internacional:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Organismo Emisor de Jursiprudencia Internacional:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Palabras Clave:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">Admisibilidad del recurso de casación</span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Relevante:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">No</span>                                                   	
+                                                    	
+                                                    </div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Vinculante:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data">No</span></div>
+                                                    <div class="col-sm-6 txtbold" style="clear:both;">Fecha de Publicación en El Peruano:</div>
+                                                    <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                           		</div>
+                                              </div>
+                                            </div>	
+											        
+											        
+										    <div class="panel panel-gris">
+                                              <div class="panel-heading"><div class="txtbold">DATOS DEL PROCESO:</div></div>
+                                              <div class="panel-body">
+                                                <div class="row marginb">
+                                                    <div class="col-sm-6 txtbold">Sala: </div>
+                                                <div class="col-sm-6 marginb2"><span class="data">Sala Penal Permanente</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Distrito Judicial de Procedencia:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">Callao</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Especialidad:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">Penal</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Materia de la Causa:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">Delitos contra la Libertad</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Pretensión/Delito:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">Violación de la libertad sexual Art. 170</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Régimen Procesal:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">Tradicional</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Tipo de Proceso:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">Proceso Común</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">N° de Expediente de la Sala Superior:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">2506-2019-0</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Archivo de la Resolución:</div>
+                                                <div class="col-sm-6 marginb2">
+                                                	<table border="0">
+                                                	 <tr>
+                                                	 <td>
+                               						      <a href="/jurisprudenciaweb/ServletDescarga?uuid=82a1732b-bee7-40f6-9e61-19db22c3a6be">
+						                   					<img src="/jurisprudenciaweb/images/iconpdf.png" />
+						                   				  </a>
+                               						 </td>
+                               						 <td> </td>
+                                                	 <td>                                               	                                               	 
+                                                       	  <a href="/jurisprudenciaweb/ServletDescarga?uuid=13f0386b-98c4-4254-b3ef-619d06ca0e4c"><input type="image" src="../images/iconword.png" name="formBuscador:repetirDetalle:0:j_idt614" />
+						                   			      </a>						                   			                                                                        
+                                                	 </td>
+                                                	 </tr>
+                                                	
+                                                	</table>
+
+                                             	                                               
+												</div>
+
+                                           		</div>
+                                              </div>
+                                            </div>        
+											
+											        
+											<div class="panel panel-gris">
+                                              <div class="panel-heading"><div class="txtbold">DATOS DE PROCEDENCIA:</div></div>
+                                              <div class="panel-body">
+                                                <div class="row marginb">
+                                                <div class="col-sm-6 txtbold">Fecha de Demanda: </div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Fecha de Calificación:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Organo Jurisdiccional de procedencia:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Fallo:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Tipo de Resolución:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Expediente de Procedencia:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data">2506-2019-0</span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Fecha de Resolución de Procedencia:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Organo Jurisdiccional de Origen:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Fallo de Origen:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Tipo de Resolución de Origen:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Expediente de Origen:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Fecha de Resolución de Origen:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+                                                <div class="col-sm-6 txtbold" style="clear:both;">Fecha de Denuncia de Origen:</div>
+                                                <div class="col-sm-6 marginb2"><span class="data"></span></div>
+		                            			</div>
+                                           		</div>
+                                              </div>
+                                             
+                                            
+               								  <div align="center"><input type="image" src="../imagen/btn-cerrar.png" name="formBuscador:repetirDetalle:0:j_idt642" onclick="RichFaces.$('formBuscador:popupResolucion').hide(); return false;" />
+		                            		  </div></div></div></div><script type="text/javascript">new RichFaces.ui.PopupPanel("formBuscador:popupResolucion",{"height":520,"width":0} );</script></div>]]></update><update id="j_idt703"><![CDATA[<span class="rf-msgs " id="j_idt703"></span>]]></update><update id="javax.faces.ViewState"><![CDATA[7945350273615678406:457317230123447234]]></update><extension id="org.richfaces.extension"><complete>RichFaces.$('panelState').hide();RichFaces.$('formBuscador:popupResolucion').show();;new RichFaces.ui.Message("j_idt703",{"isMessages":true} );</complete></extension></changes></partial-response>

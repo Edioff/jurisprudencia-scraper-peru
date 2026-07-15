@@ -207,9 +207,29 @@ test('PJ: parseFicha captures a value with nested markup without truncating', ()
     `<div class="col-sm-6 marginb2"><div class="wrap"><p>Primera parte</p></div><p>segunda parte</p></div>`;
   const ficha = parseFicha(modal);
   // Both the nested and the trailing text survive — a regex stopping at the
-  // first </div> would have dropped "segunda parte".
+  // first </div> would have dropped "segunda parte". (Also: a section title
+  // NOT marked `txtbold` is still recognized — the parser doesn't depend on
+  // the exact header markup.)
   assert.ok(ficha.resolucion.sumilla.includes('Primera parte'));
   assert.ok(ficha.resolucion.sumilla.includes('segunda parte'));
+});
+
+test('PJ: parseFicha sections a real captured "Ver Ficha" response', () => {
+  // Verbatim partial-response captured from the live site during recon. This
+  // guards against fixture drift: on the real site the section titles are
+  // themselves `txtbold` divs, and treating them as field labels once sent
+  // all ~40 fields into `extra` with the three sections empty.
+  const xml = fs.readFileSync(path.join(__dirname, 'ficha-real-response.xml'), 'utf-8');
+  const modal = parsePartialResponse(xml).updates.get('formBuscador:popupResolucion');
+  assert.ok(modal, 'the popup update is present in the capture');
+  const ficha = parseFicha(modal as string);
+  assert.equal(Object.keys(ficha.resolucion).length, 18);
+  assert.equal(Object.keys(ficha.proceso).length, 9);
+  assert.equal(Object.keys(ficha.procedencia).length, 13);
+  assert.equal(Object.keys(ficha.extra).length, 0, 'no field left uncategorized');
+  assert.equal(ficha.resolucion.tipoDeResolucion, 'Ejecutoria Suprema');
+  assert.equal(ficha.proceso.sala, 'Sala Penal Permanente');
+  assert.equal(ficha.procedencia.expedienteDeProcedencia, '2506-2019-0');
 });
 
 // ---------------------------------------------------------------------------

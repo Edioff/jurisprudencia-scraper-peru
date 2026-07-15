@@ -29,7 +29,7 @@ import { DocumentRecord, FichaDetail } from '../types';
 import { PdfDownload, SearchResult, SiteAdapter } from './adapter';
 import { fileNameFromDisposition, sanitizeFileName } from '../core/files';
 import { log } from '../core/logger';
-import { sleep } from '../core/retry';
+import { parseRetryAfterMs, RetriesExhaustedError, sleep } from '../core/retry';
 
 const FORM = 'formBuscador';
 const SPINNER = `${FORM}:spinner`;
@@ -186,9 +186,10 @@ export class PjAdapter implements SiteAdapter {
 
 /**
  * Run `fn`, and on failure re-initialize the session (fresh ViewState) and
- * try again, up to a few times with linear backoff. This absorbs the PJ
- * server's frequent intermittent 500s on navigation, which a plain
- * same-ViewState retry cannot recover from.
+ * try again, with the same exponential backoff + jitter policy as the inner
+ * retry layer (and honoring Retry-After if the underlying failure carried
+ * one). This absorbs the PJ server's frequent intermittent 500s on
+ * navigation, which a plain same-ViewState retry cannot recover from.
  */
 async function withReinit<T>(
   session: JsfSession,
@@ -203,7 +204,12 @@ async function withReinit<T>(
     } catch (err) {
       lastError = err;
       if (i === attempts) break;
-      const wait = 1500 * i;
+      // If fn() exhausted its inner retries, the rate-limit hint (if any)
+      // lives on the wrapped error, not the wrapper.
+      const cause = err instanceof RetriesExhaustedError ? err.lastError : err;
+      const retryAfter = parseRetryAfterMs(cause);
+      const backoff = Math.round(1500 * 2 ** (i - 1) * (0.75 + Math.random() * 0.5));
+      const wait = Math.min(retryAfter ?? backoff, 60_000);
       log.warn(`${label}: ${(err as Error).message} — re-initializing session (try ${i}/${attempts - 1})`);
       await sleep(wait);
       await session.init();
@@ -304,7 +310,18 @@ export function parseFicha(modalHtml: string): FichaDetail {
     const cls = $el.attr('class') ?? '';
 
     if (/(^|\s)txtbold(\s|$)/.test(cls)) {
-      label = $el.text().replace(/\*+/g, '').replace(/:\s*$/, '').replace(/\s+/g, ' ').trim();
+      const text = $el.text().replace(/\s+/g, ' ').trim();
+      // The section titles themselves are `txtbold` divs (inside the panel
+      // heading), so check for a header BEFORE treating the element as a
+      // field label — otherwise the title is swallowed as a label and every
+      // field lands in `extra`.
+      const header = FICHA_SECTIONS.find((s) => s.re.test(text));
+      if (header) {
+        section = header.key;
+        label = null;
+        return;
+      }
+      label = text.replace(/\*+/g, '').replace(/:\s*$/, '').trim();
       return;
     }
     if (/(^|\s)marginb2(\s|$)/.test(cls)) {

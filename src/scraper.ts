@@ -459,9 +459,19 @@ async function downloadRow(
             const fresh = await reestablish(session, adapter, state, row.page, pageSize);
             // Match strictly by uuid: row indexes shift if the result set
             // changed, and downloading the wrong document would be worse
-            // than failing.
+            // than failing. Known limitation: if the corpus shifted while the
+            // session was down and the document moved to ANOTHER page, it
+            // won't be found here — the retry below runs with the stale
+            // identifiers (fails for view-bound downloads like OEFA's), gets
+            // recorded as failed, and `retry-failed` picks it up later.
             const replacement = fresh.find((r) => r.uuid === row.uuid);
             if (replacement) Object.assign(row, replacement);
+            else {
+              log.warn(
+                `${label}: document no longer on page ${row.page + 1} after recovery — ` +
+                  `retrying with its previous identifiers`,
+              );
+            }
           },
           label,
         )

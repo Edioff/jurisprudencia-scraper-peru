@@ -14,7 +14,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { toCsv, writeJsonAtomic } from './core/files';
+import { toCsv, writeJsonAtomic, writeTextAtomic } from './core/files';
+import { log } from './core/logger';
 import { Db, RunStatus } from './core/db';
 import { DocumentRecord, FailedDownload, FichaDetail } from './types';
 
@@ -146,11 +147,27 @@ export class StateStore {
 
   // --- document metadata + ficha --------------------------------------------
 
+  /** doc_key -> page where this run first saw it, to surface duplicates live. */
+  private seenThisRun = new Map<string, number>();
+
   /** Upsert each row's list metadata; persist any already-attached ficha. */
   addDocuments(docs: DocumentRecord[]): void {
     this.db.tx(() => {
       for (const doc of docs) {
         const key = docKey(doc);
+        // The upsert quietly keeps the newest metadata (and preserves download
+        // state), which is right for resumes — but the same key showing up on
+        // TWO pages within one run means the site served a duplicate (or the
+        // corpus shifted mid-run), and that should be visible as it happens,
+        // not just inferable from the final counts.
+        const firstPage = this.seenThisRun.get(key);
+        if (firstPage !== undefined && firstPage !== doc.page) {
+          log.warn(
+            `Duplicate document ${key}: already seen on page ${firstPage + 1}, ` +
+              `now again on page ${doc.page + 1} — keeping the newest metadata`,
+          );
+        }
+        this.seenThisRun.set(key, doc.page);
         this.db.upsertDocument(doc, key, this.hasDetail);
         if (doc.detail) this.db.setDetail(key, doc.detail, 'done');
       }
@@ -203,9 +220,15 @@ export class StateStore {
   // --- persistence ----------------------------------------------------------
 
   /** Lightweight durability checkpoint, called after each page. Writes are
-   *  already committed per statement; this just bounds WAL growth. */
+   *  already committed per statement; this just bounds WAL growth — so a
+   *  failed checkpoint (disk full, transient I/O error) must not kill the
+   *  run: warn and keep going, the next checkpoint will try again. */
   save(): void {
-    this.db.checkpoint();
+    try {
+      this.db.checkpoint();
+    } catch (err) {
+      log.warn(`WAL checkpoint failed: ${(err as Error).message} — continuing`);
+    }
   }
 
   close(): void {
@@ -226,7 +249,7 @@ export class StateStore {
     if (docs.length > 0) {
       const flat = docs.map(flattenForCsv);
       const headers = unionKeys(flat);
-      fs.writeFileSync(path.join(this.outDir, 'documents.csv'), toCsv(headers, flat), 'utf-8');
+      writeTextAtomic(path.join(this.outDir, 'documents.csv'), toCsv(headers, flat));
     }
 
     const state = {

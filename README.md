@@ -188,6 +188,7 @@ CREATE TABLE runs (
   finished_at    TEXT,     -- cuándo terminó (null mientras corre)
   status         TEXT,     -- running | completed | interrupted | failed
   corpus_total   INTEGER,  -- total que reporta el sitio para la búsqueda
+  pages_done     INTEGER,  -- páginas completadas al cierre de la corrida
   docs_extracted INTEGER,  -- cuántos documentos salieron
   pdfs_done      INTEGER,  -- cuántos PDFs se bajaron
   pdfs_failed    INTEGER,  -- cuántos quedaron fallidos
@@ -701,8 +702,10 @@ implementaciones de referencia — arranca de la que se parezca más a tu objeti
 npm test
 ```
 
-35 tests unitarios (con el runner incorporado de Node, sin dependencias extra)
-cubren la lógica pura contra *fixtures* capturados de **ambos** sitios en vivo:
+42 tests unitarios (con el runner incorporado de Node, sin dependencias extra)
+cubren la lógica pura contra *fixtures* capturados de **ambos** sitios en vivo
+— incluida una respuesta **real** del modal "Ver Ficha" (`tests/ficha-real-response.xml`,
+capturada tal cual del sitio) que valida el parseo de la ficha de punta a punta:
 
 - **OEFA:** parseo de partial-response (incluido el escape de CDATA partido de
   JSF para el `]]>` literal), extracción de filas de las dos formas de fragmento.
