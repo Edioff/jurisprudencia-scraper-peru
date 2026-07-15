@@ -7,6 +7,11 @@ dist/
 # Scraper output (data, PDFs, state)
 output/
 
+# SQLite database + WAL sidecars (run artifacts, never committed)
+*.db
+*.db-wal
+*.db-shm
+
 # Logs
 *.log
 
@@ -26,3 +31,14 @@ recon-pj.sh
 # Local scratch / exploration (not part of the deliverable)
 /test-*.ts
 /code-review-findings.json
+
+# --- Committed sample run of PJ (so a reviewer without a Peru VPN can still
+# inspect real output). Keep the SQLite DB + the JSON/CSV exports; never commit
+# the bulky PDFs or the WAL sidecars. Negations come AFTER the *.db rule above. ---
+!sample/
+!sample/documents.db
+!sample/documents.json
+!sample/documents.csv
+!sample/state.json
+!sample/report.json
+sample/pdfs/

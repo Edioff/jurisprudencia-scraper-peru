@@ -1,0 +1,17 @@
+# Keep the build context small and reproducible.
+node_modules
+dist
+output
+salida-*
+.git
+.gitignore
+docs
+*.db
+*.db-wal
+*.db-shm
+*.log
+recon-pj
+recon-pj.sh
+Dockerfile
+.dockerignore
+README.md

@@ -49,11 +49,20 @@ export const PJ_RESULTS_PAGE = `<span id="formBuscador:optResultado" class="Titu
 ${PJ_RESULT_LINK}
 ${PJ_RESULT_LINK_2}`;
 
-/** The "Ver Ficha" modal body (trimmed to a few label/value rows, verbatim
- *  markup): a bold label div followed by a value div. Includes an accented
- *  label, an empty value, and a label ("Tipo de Resolución") that repeats
- *  later in the modal with a blank value. */
-export const PJ_FICHA_MODAL = `<div class="col-sm-6 txtbold">Fecha de la Resolución: </div><div class="col-sm-6 marginb2"><span class="data">09/07/2026</span></div><div class="col-sm-6 txtbold" style="clear:both;">Tipo de Resolución: </div><div class="col-sm-6 marginb2"><span class="data">Ejecutoria Suprema</span></div><div class="col-sm-6 txtbold" style="clear:both;">Jueces Supremos:</div><div class="col-sm-6 marginb2"><span class="data">CAMPOS BARRANZUELA, PRADO SALDARRIAGA</span></div><div class="col-sm-6 txtbold" style="clear:both;">*** Ponente:</div><div class="col-sm-6 marginb2"><span class="data"></span></div><div class="col-sm-6 txtbold">N° de Expediente de la Sala Superior:</div><div class="col-sm-6 marginb2"><span class="data">2506-2019-0</span></div><div class="col-sm-6 txtbold">Tipo de Resolución:</div><div class="col-sm-6 marginb2"><span class="data"></span></div>`;
+/** The "Ver Ficha" modal body (trimmed, verbatim markup): a bold label div
+ *  followed by a value div, organized under the three section headers the site
+ *  renders. Exercises: an accented/symbol label (slugged), an empty value
+ *  (preserved), a label ("Tipo de Resolución") that repeats *within* a section
+ *  with a blank value (must not clobber the real one) and *across* sections
+ *  (kept separate per bucket), and a pair before any known header (→ `extra`,
+ *  so nothing is lost when the layout is unexpected). */
+export const PJ_FICHA_MODAL = `<div class="col-sm-6 txtbold">Identificador:</div><div class="col-sm-6 marginb2"><span class="data">XYZ</span></div>
+<div class="tituloSeccion">DATOS DE LA RESOLUCIÓN:</div>
+<div class="col-sm-6 txtbold">Fecha de la Resolución: </div><div class="col-sm-6 marginb2"><span class="data">09/07/2026</span></div><div class="col-sm-6 txtbold" style="clear:both;">Tipo de Resolución: </div><div class="col-sm-6 marginb2"><span class="data">Ejecutoria Suprema</span></div><div class="col-sm-6 txtbold" style="clear:both;">Jueces Supremos:</div><div class="col-sm-6 marginb2"><span class="data">CAMPOS BARRANZUELA, PRADO SALDARRIAGA</span></div><div class="col-sm-6 txtbold" style="clear:both;">*** Ponente:</div><div class="col-sm-6 marginb2"><span class="data"></span></div><div class="col-sm-6 txtbold" style="clear:both;">Tipo de Resolución:</div><div class="col-sm-6 marginb2"><span class="data"></span></div>
+<div class="tituloSeccion">DATOS DEL PROCESO:</div>
+<div class="col-sm-6 txtbold">N° de Expediente de la Sala Superior:</div><div class="col-sm-6 marginb2"><span class="data">2506-2019-0</span></div><div class="col-sm-6 txtbold">Sala:</div><div class="col-sm-6 marginb2"><span class="data">Sala Penal Permanente</span></div>
+<div class="tituloSeccion">DATOS DE PROCEDENCIA:</div>
+<div class="col-sm-6 txtbold">Tipo de Resolución:</div><div class="col-sm-6 marginb2"><span class="data">Sentencia</span></div><div class="col-sm-6 txtbold">Fecha de Demanda:</div><div class="col-sm-6 marginb2"><span class="data">07/08/2024</span></div>`;
 
 /** The inicio.xhtml search form (trimmed): hidden fields, a select, the two
  *  search buttons (general + specialized) and the ViewState. */

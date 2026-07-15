@@ -1,284 +1,688 @@
-# Scraper Challenge — JSF/PrimeFaces Document Repositories
+# Scraper de jurisprudencia peruana (JSF: RichFaces / PrimeFaces)
 
-A TypeScript scraper for Peruvian government document repositories built on
-**JSF (JavaServer Faces) + PrimeFaces** — implemented with **pure HTTP requests**
-(`axios` + `cheerio`), no browser automation of any kind.
+Scraper en **TypeScript** para dos repositorios de documentos del Estado peruano,
+hecho con **peticiones HTTP puras** (`axios` + `cheerio`). **No usa automatización
+de navegador** (nada de Puppeteer, Playwright ni Selenium): se conversa con el
+servidor a mano, entendiendo su protocolo.
 
-It walks the complete result set, extracts every document's metadata, downloads
-each associated PDF with a descriptive file name, and survives rate limiting
-(HTTP 429), transient failures, session expiry and interruptions.
+Recorre el listado completo, extrae **toda** la información de cada documento,
+descarga su PDF con un nombre descriptivo, y aguanta lo que un scraper de verdad
+tiene que aguantar: rate limiting (HTTP 429), caídas intermitentes del servidor,
+expiración de sesión e interrupciones a medio camino (lo puedes cortar y
+reanudar).
 
-| Site | Adapter | Stack | Status |
+| Sitio | Adapter | Framework | Estado |
 | --- | --- | --- | --- |
-| `jurisprudencia.pj.gob.pe/jurisprudenciaweb/faces/page/resultado.xhtml` | `pj` | JSF + **RichFaces 4.2.2** | ✅ Working (208,341 documents / 20,835 pages). Geo-blocked outside Peru — run behind a Peru VPN. |
-| `publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml` | `oefa` | JSF + **PrimeFaces 6.0** | ✅ Working (1,753 documents / 176 pages). Reachable anywhere — the challenge's no-VPN alternative. |
+| `jurisprudencia.pj.gob.pe/.../resultado.xhtml` | `pj` | JSF + **RichFaces 4.2.2** | ✅ Funciona (208.341 documentos / 20.835 páginas). Geo-bloqueado fuera de Perú → correr con **VPN de Perú**. |
+| `publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml` | `oefa` | JSF + **PrimeFaces 6.0** | ✅ Funciona (1.753 documentos / 176 páginas). Accesible desde cualquier lugar → es el **alterno sin VPN**. |
 
-`pj` is the challenge's primary target; `oefa` is the sanctioned no-VPN
-alternative. They run on **different JSF component frameworks** and interact
-with their servers quite differently (see [How the sites work](#how-the-sites-work)),
-yet share one core — which is the point of the adapter split.
+`pj` es el objetivo principal del reto; `oefa` es el alterno permitido para
+desarrollar sin VPN. Lo interesante es que **corren sobre frameworks JSF
+distintos** y se comportan muy diferente (ver [Cómo funcionan los sitios](#cómo-funcionan-los-sitios-el-reverse-engineering)),
+pero comparten **un mismo núcleo**. Esa es justamente la gracia de separar el
+núcleo de los *adapters*.
 
 ---
 
-## Quick start
+## Requisitos
+
+- **Node.js ≥ 20** (por `better-sqlite3`, que trae binarios precompilados; no
+  necesitas compilador).
+- Dependencias de runtime: `axios`, `cheerio`, `better-sqlite3`.
+- Dependencias de desarrollo: `typescript`, `ts-node`, tipos.
 
 ```bash
 npm install
-
-# Smoke test against PJ (needs a Peru VPN): first 2 pages, max 5 PDFs
-npm run scrape -- --site pj --max-pages 2 --max-docs 5
-
-# Full PJ scrape (all pages, all PDFs — resumable, safe to interrupt)
-npm run scrape -- --site pj
-
-# Same against OEFA (no VPN needed) — handy for development
-npm run scrape -- --site oefa --max-pages 2 --max-docs 5
-
-# Re-attempt any downloads that exhausted their retries
-npm run retry-failed -- --site pj
-
-# Metadata only, no PDFs
-npm run scrape -- --site pj --skip-pdfs
 ```
 
-The default site is `oefa` (so `npm run scrape` works with no VPN); pass
-`--site pj` for the primary target.
+---
 
-Commands: `scrape`, `retry-failed`, `report` (validate an existing output dir).
+## Inicio rápido
 
-All flags:
+> **Nota para Windows / PowerShell.** PowerShell se **come el `--`** que separa
+> los argumentos de `npm`, y entonces `npm` interpreta mal las banderas
+> (`--site`, `--out`…). Por eso en Windows lo más limpio es llamar a `ts-node`
+> directo, sin `npm run`:
+>
+> ```powershell
+> npx ts-node src/index.ts scrape --site pj --out output --concurrency 10 --max-pages 5
+> ```
+>
+> En macOS/Linux sí funciona la forma normal con `npm run ... -- ...`:
+>
+> ```bash
+> npm run scrape -- --site pj --out output --concurrency 10 --max-pages 5
+> ```
+
+Ejemplos (uso la forma `npx ts-node`, que sirve en todos lados):
+
+```bash
+# Prueba rápida contra PJ (requiere VPN de Perú): primeras 5 páginas
+npx ts-node src/index.ts scrape --site pj --out output --max-pages 5
+
+# Scrape completo de PJ (todas las páginas; se puede interrumpir y reanudar)
+npx ts-node src/index.ts scrape --site pj --out output
+
+# Lo mismo contra OEFA (no necesita VPN) — cómodo para desarrollar
+npx ts-node src/index.ts scrape --site oefa --out salida-oefa --max-pages 5
+
+# Reintentar solo los PDFs que quedaron marcados como fallidos
+npx ts-node src/index.ts retry-failed --site pj --out output
+
+# Regenerar documents.json / documents.csv / state.json desde la base de datos
+npx ts-node src/index.ts export --out output
+
+# Reporte de validación (sanity check) de una corrida existente
+npx ts-node src/index.ts report --out output
+```
+
+### Comandos
+
+| Comando | Qué hace |
+| --- | --- |
+| `scrape` | Recorre el listado, extrae metadata + ficha, descarga los PDFs. **Reanuda** lo que ya estaba hecho. |
+| `retry-failed` | Reprocesa solo los documentos con la descarga marcada como `failed`. |
+| `export` | Vuelca la base de datos a `documents.json`, `documents.csv` y `state.json`. |
+| `report` | Valida una corrida y escribe/imprime el reporte de sanidad. |
+| `verify` | Alias de `report` (cobertura, PDFs en disco, pendientes/fallidos). |
+
+### Banderas
 
 ```
---site <name>     Site adapter to use (default: oefa)
---out <dir>       Output directory (default: ./output)
---delay <ms>      Politeness delay between request starts (default: 600)
---max-pages <n>   Process at most n result pages this run (default: all)
---max-docs <n>    Download at most n PDFs this run (default: unlimited)
---attempts <n>    Max attempts per download before recording failure (default: 5)
---concurrency <n> Parallel PDF downloads, where the site allows it (default: 1)
---proxies <file>  Rotate through proxy URLs in <file>, one per line (default: direct)
---skip-details    Skip the per-document detail (ficha) fetch; keep list metadata only
---skip-pdfs       Extract metadata only
---verbose         Debug logging
+--site <name>      Adapter a usar: pj | oefa (default: oefa)
+--out <dir>        Carpeta de salida (default: ./output)
+--delay <ms>       Espera entre inicios de petición (default: 600)
+--max-pages <n>    Procesar como máximo n páginas en esta corrida (default: todas)
+--max-docs <n>     Descargar como máximo n PDFs en esta corrida (default: sin tope)
+--attempts <n>     Intentos por descarga antes de marcarla como fallida (default: 5)
+--concurrency <n>  Descargas en paralelo, donde el sitio lo permita (default: 1)
+--page-concurrency <n>  Paginación en paralelo con n sesiones independientes (default: 1)
+--proxies <file>   Rotar por los proxies de <file>, uno por línea (default: directo)
+--skip-details     No traer la ficha; quedarse solo con la metadata del listado
+--skip-pdfs        Solo metadata, sin descargar PDFs
+--verbose          Log de depuración
 ```
 
-By default the PJ scraper extracts the **full ~40-field detail record** of each
-document (the "Ver Ficha" data), not just the ~9 list fields — see
-[How the sites work](#how-the-sites-work). Pass `--skip-details` for a faster,
-list-only pass.
+Por defecto, el scraper de PJ extrae la **ficha completa de ~40 campos** de cada
+documento (el "Ver Ficha"), no solo los ~9 del listado. Con `--skip-details`
+haces una pasada más rápida, solo de listado.
 
-Neither full run needs to finish in one sitting — interrupt it (Ctrl+C) at any
-point and re-run to resume. PJ is a large corpus (208k documents); the point of
-resume + `retry-failed` is exactly that you don't have to download it all at
-once, and the challenge only asks the scraper to *demonstrate* it can.
+Ninguna corrida completa tiene que terminar de una sentada: la interrumpes con
+`Ctrl+C` cuando quieras y al volver a correr **reanuda** donde iba. PJ es un
+corpus grande (208 mil documentos); el punto de la reanudación + `retry-failed`
+es precisamente ese, que no tienes que bajarlo todo de un tirón.
 
-### Output layout
+---
+
+## Cómo se guarda la data (SQLite)
+
+Toda la corrida vive en una base de datos **SQLite** dentro de la carpeta de
+salida: `output/documents.db`. Los archivos `documents.json`, `documents.csv` y
+`state.json` son **exportaciones** que se generan desde ahí (al final de cada
+corrida, o cuando corres `export`).
+
+### ¿Por qué SQLite y no solo un JSON?
+
+Al principio esto guardaba todo en un `documents.json`. Con un corpus de 208 mil
+documentos ese enfoque se cae por dos razones:
+
+1. **No escala.** Un array JSON de 208 mil objetos hay que cargarlo entero en
+   memoria para leerlo o consultarlo, y se reescribe completo en cada página. Es
+   caro y frágil.
+2. **No es consultable.** Para saber "¿qué páginas me faltan?" o "¿cuáles PDFs
+   fallaron?" tocaría recorrer el archivo entero a mano.
+
+Una base de datos embebida es la respuesta honesta a ese tamaño: **un solo
+archivo**, indexado por `uuid`, con consultas de reanudación que son una línea de
+SQL. `better-sqlite3` es síncrono y trae binarios precompilados, así que
+`npm install` no necesita compilador y no añade fricción.
+
+Los PDFs **sí** quedan como archivos en `output/pdfs/` (el reto los pide así),
+amarrados a su documento por la columna `pdf_file` ↔ el `uuid`.
+
+### Las tres tablas
+
+```sql
+-- documents: la data. Una fila por documento.
+CREATE TABLE documents (
+  doc_key      TEXT PRIMARY KEY,   -- el uuid, o una clave sintética si el doc no tiene
+  uuid         TEXT,
+  page         INTEGER,
+  row_index    INTEGER,
+  recurso      TEXT,               -- campos de identidad "promovidos" para consultar fácil
+  nro_exp      TEXT,
+  list_data    TEXT,               -- JSON: los ~9 campos del listado
+  resolucion   TEXT,               -- JSON: sección DATOS DE LA RESOLUCIÓN
+  proceso      TEXT,               -- JSON: sección DATOS DEL PROCESO
+  procedencia  TEXT,               -- JSON: sección DATOS DE PROCEDENCIA
+  extra        TEXT,               -- JSON: cualquier campo fuera de esas 3 secciones
+  pdf_file     TEXT,               -- nombre del PDF en pdfs/
+  pdf_status   TEXT,               -- pending | in_progress | done | failed
+  ficha_status TEXT,               -- pending | in_progress | done | failed | na
+  attempts     INTEGER,
+  last_error   TEXT,
+  updated_at   TEXT
+);
+
+-- pages: la máquina de estados de la paginación.
+CREATE TABLE pages (
+  page       INTEGER PRIMARY KEY,
+  status     TEXT,                 -- pending | in_progress | done | failed
+  row_count  INTEGER,
+  attempts   INTEGER,
+  last_error TEXT,
+  updated_at TEXT
+);
+
+-- runs: el historial de ejecuciones (una fila por corrida).
+CREATE TABLE runs (
+  run_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  site           TEXT,
+  command        TEXT,     -- 'scrape' | 'retry-failed'
+  started_at     TEXT,     -- cuándo empezó
+  finished_at    TEXT,     -- cuándo terminó (null mientras corre)
+  status         TEXT,     -- running | completed | interrupted | failed
+  corpus_total   INTEGER,  -- total que reporta el sitio para la búsqueda
+  docs_extracted INTEGER,  -- cuántos documentos salieron
+  pdfs_done      INTEGER,  -- cuántos PDFs se bajaron
+  pdfs_failed    INTEGER,  -- cuántos quedaron fallidos
+  pending        INTEGER   -- cuántos faltan por bajar (corpus_total - pdfs_done)
+);
+```
+
+La idea es simple: **`documents` es la data, `pages` es el progreso, `runs` es el
+historial de corridas** (cuándo corrió, cuándo terminó, con qué estado, cuántos
+salieron y cuántos faltan). Los 46 campos de cada documento no se guardan como 46
+columnas fijas (los dos sitios tienen campos distintos), sino agrupados en
+columnas JSON. Eso mantiene el esquema estable para ambos sitios y para cualquier
+variación entre documentos.
+
+La tabla `documents` en [DB Browser for SQLite](https://sqlitebrowser.org), con
+las columnas de identidad promovidas (`recurso`, `nro_exp`), las de secciones
+(`list_data`, `resolucion`, `proceso`, `procedencia`) y las de estado
+(`pdf_status`, `ficha_status`):
+
+![Tabla documents en DB Browser](docs/img/documents.png)
+
+### La máquina de estados (el porqué)
+
+Cada unidad de trabajo —una página y un documento— avanza por estados explícitos.
+Eso es lo que hace que la reanudación sea **precisa**: al reiniciar se rehace
+exactamente lo que **no** quedó en `done`, y si el proceso se muere a mitad de un
+ítem, ese ítem queda en `in_progress`, así que se reintenta en vez de saltárselo
+en silencio.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending
+    pending --> in_progress: empieza a procesar
+    in_progress --> done: éxito
+    in_progress --> failed: se agotaron los reintentos
+    failed --> in_progress: retry-failed / re-run
+    done --> [*]
+```
+
+- **`pending`** — descubierto, todavía no procesado.
+- **`in_progress`** — empezó a procesarse (si hay un crash aquí, se reintenta).
+- **`done`** — completado con éxito.
+- **`failed`** — se agotaron los reintentos; queda registrado para `retry-failed`.
+- **`na`** — no aplica (por ejemplo, el estado de la ficha en OEFA, que no tiene modal).
+
+La tabla `pages` durante una corrida — se ve la máquina de estados en vivo: las
+páginas terminadas en `done` y la que se está procesando en `in_progress`:
+
+![Tabla pages con una página in_progress](docs/img/pages.png)
+
+Con eso, reanudar es esto (y nada más):
+
+```sql
+-- Páginas que faltan:
+SELECT page FROM pages WHERE status != 'done';
+-- PDFs por (re)intentar, incluidos los que fallaron por 429:
+SELECT uuid, pdf_file FROM documents WHERE pdf_status IN ('pending','failed');
+```
+
+Los `documents.json` / `.csv` / `state.json` son **exports** derivados de la DB.
+Si prefieres abrir la data en Excel, ahí tienes el CSV; si quieres la fuente de
+verdad consultable, ahí está la `.db`.
+
+### Ejemplo real de lo que queda guardado
+
+Salida de una corrida real, consultando la DB (2 páginas, 20 documentos):
+
+```text
+Estados por página:     [ { status: 'done', n: 2 } ]
+Estados de descarga:    pdf:   [ { pdf_status: 'done', n: 20 } ]
+Estados de ficha:       ficha: [ { ficha_status: 'done', n: 20 } ]
+
+Un documento (recurso: Casación | nro_exp: 001785-2024):
+  RESOLUCION : { fechaDeLaResolucion: "09/07/2026", tipoDeResolucion: "Ejecutoria Suprema",
+                 juecesSupremos: "CAMPOS BARRANZUELA, PRADO SALDARRIAGA, PEÑA FARFAN, ...",
+                 ponente: "ALTABAS KAJATT DE MILLA", sumilla: "En el caso, solo los ...", ... }
+  PROCESO    : { sala: "Sala Penal Permanente", distritoJudicialDeProcedencia: "Callao",
+                 especialidad: "Penal", materiaDeLaCausa: "Delitos contra la Libertad",
+                 nDeExpedienteDeLaSalaSuperior: "2506-2019-0", ... }
+  PROCEDENCIA: { expedienteDeProcedencia: "2506-2019-0", fechaDeDemanda: "", ... }
+```
+
+Y la tabla `runs` tras una corrida real de PJ (20 páginas → 200 documentos, 200
+PDFs bajados, 0 fallidos, y `pending` = lo que falta del corpus):
+
+![Tabla runs con una corrida de PJ](docs/img/runs.png)
+
+### Estructura de la carpeta de salida
 
 ```
 output/
-├── documents.json   # every extracted document (all metadata fields + uuid + local pdf name)
-├── documents.csv    # same data as CSV
-├── state.json       # resume/retry bookkeeping (completed pages, downloaded uuids, failed downloads)
-├── report.json      # validation report (see below)
-└── pdfs/            # PJ: "Casación-001785-2024__Resolucion_10_....pdf"; OEFA: "264-2012-OEFA-TFA__RTFA N° 264-2012.pdf"
+├── documents.db     # ← la fuente de verdad (SQLite: documents, pages, runs)
+├── documents.json   # export: cada documento (metadata + las 3 secciones de la ficha)
+├── documents.csv    # export: lo mismo, aplanado a columnas (secciones con prefijo res:/proc:/proce:)
+├── state.json       # export: resumen de progreso (páginas hechas, uuids bajados, fallidos, historial de runs)
+├── report.json      # reporte de validación
+└── pdfs/            # los PDFs con nombre descriptivo:
+                     #   PJ  → "Casación-001785-2024__Resolucion_10_....pdf"
+                     #   OEFA→ "264-2012-OEFA-TFA__RTFA N° 264-2012.pdf"
 ```
 
-### Validation (sanity checks before delivering)
+### Muestra incluida en el repo
 
-Every scrape ends with a validation report — and `npm run report -- --out <dir>`
-regenerates it against an existing run. It's the "check the data makes sense
-before handing it over" step the challenge asks for, and it checks:
-
-- **Coverage** — documents extracted vs the corpus total, pages completed.
-- **Identity integrity** — the fields that must exist on every document
-  (e.g. `recurso` + `nroexp` for PJ) are flagged if under 100% — a fast signal
-  of a parsing regression. Genuinely-optional fields (a sumilla, a keyword
-  list) are shown but never warned on, so the report doesn't cry wolf.
-- **Duplicates** — repeated uuids among extracted documents.
-- **PDF integrity** — a sample of downloaded files is checked for the `%PDF-`
-  header and a non-trivial size.
-- **Failures** — how many downloads are pending in the retry list.
-
-```
-Validation report — pj
-  Corpus total:        208341
-  Documents extracted: 30 (0% of corpus)
-  Unique uuids:        30
-  PDFs downloaded:     30 (sample valid: 25/25)
-  Metadata coverage:
-   *recurso            100%  (30/30)
-   *nroexp             100%  (30/30)
-    sumilla             40%  (12/30)
-    (* = identity field, must be 100%)
-  ✓ No consistency issues found.
-```
+Como PJ está geo-bloqueado a Perú y quien revise puede no tener VPN, el repo
+incluye una **muestra real de PJ** en `sample/`: la base `documents.db` (200
+documentos con su ficha completa de ~40 campos), más los exports
+`documents.json` / `.csv`, `state.json` y `report.json`. Los PDFs no se
+versionan (pesan), pero sus nombres quedan referenciados en la data. Ábrela con
+[DB Browser for SQLite](https://sqlitebrowser.org) para ver el resultado sin
+correr nada.
 
 ---
 
-## How the sites work
+## La ficha completa, por secciones
 
-The challenge asks you to discover each site's structure. Both are **JSF
-(Mojarra)** with no REST API and no stable URLs — every interaction is a POST
-against an `.xhtml` page carrying a `JSESSIONID` cookie and a
-`javax.faces.ViewState` token. But they run different component frameworks on
-top of JSF, and the mechanics diverge enough that they are genuinely two
-protocols. This is the interesting part of the challenge, so it's worth
-spelling out.
+El reto pide extraer **los datos de cada documento**, y el listado es apenas un
+resumen: cada fila tiene un botón **"Ver Ficha"** que abre un modal con ~40
+campos más (el colegiado de jueces, ponente, fallo/sentido, distrito judicial,
+materia, régimen procesal, N° de expediente de la sala superior, y toda la
+historia de procedencia del proceso).
 
-### PJ — RichFaces 4.2.2 (the primary target)
+El modal viene organizado en **tres secciones**, y así mismo se guardan (cada una
+en su columna JSON):
 
-ViewState here is a short server-side handle (`123:456`), not an encrypted
-tree. The flow is classic, **non-AJAX** JSF:
+- **`resolucion`** → *DATOS DE LA RESOLUCIÓN* (fecha, tipo, jueces, ponente, fallo, sumilla, palabras clave…).
+- **`proceso`** → *DATOS DEL PROCESO* (sala, distrito judicial, materia, régimen procesal, N° de expediente…).
+- **`procedencia`** → *DATOS DE PROCEDENCIA* (fechas de demanda/calificación/origen, fallos previos…).
+- **`extra`** → cualquier par etiqueta/valor que aparezca **fuera** de esas tres secciones.
 
-- **Search.** GET `inicio.xhtml` for the ViewState and the full search form.
-  Then a **full form POST** — the entire form resubmitted, plus the
-  "general search" button's params. The server answers `302 → resultado.xhtml`.
-  Gotcha: the site sits behind a TLS-terminating proxy that emits `http://`
-  Location headers after an `https://` request; the HTTP client upgrades the
-  scheme back (`http-client.ts`), otherwise the redirect breaks.
-- **Count + pagination.** The results page reports the total in prose
-  ("se obtuvieron 208341 resultados") and renders 10 items per page. Paging is
-  another full form POST that drives the RichFaces page-number spinner
-  (`formBuscador:spinner`) + its "IR" button to jump to any 1-based page.
-- **List metadata.** Each result is a `formBuscador:repeat:N:...` block whose
-  link `onclick` embeds a JS object with ~9 fields (uuid, expediente, recurso,
-  sala, fecha, sumilla…). We read metadata straight from that object rather
-  than scraping the formatted panel — more robust, and `N` is the row's
-  absolute index across the whole result set. The object is doubly escaped in
-  the markup (`&quot;` entities *and* `\"`), with `-` for dashes;
-  `parseResults` collapses all of it.
-- **Full detail (the "Ver Ficha" modal).** The challenge asks for *all* the
-  information of each document, and the list is only a preview — each row's
-  "Ver Ficha" opens a modal with ~40 fields (the panel of judges, ponente,
-  fallo/sentido, distrito judicial, materia, régimen procesal, N° de expediente
-  de la sala superior, and the full procedural-origin history). It's a
-  RichFaces AJAX (`render=@component`) that re-renders the popup; the scraper
-  fires it per row and parses the label/value grid (`fetchDetail` + `parseFicha`),
-  merging all of it into the document. This is a stateful call (the row must be
-  in the current view), so details are fetched sequentially per page; on the
-  server's flaky ViewExpired the page is re-established and the fetch retried.
-  Disable with `--skip-details` for a fast list-only run.
-- **PDF download.** A plain `GET /jurisprudenciaweb/ServletDescarga?uuid=<uuid>`
-  streams the PDF (`Content-Disposition: attachment`). No arming, no ViewState.
-- **Flakiness.** The PJ server returns intermittent `500`/`503`s on
-  navigation. A same-ViewState retry can't recover those, so search/pagination
-  re-initialize the session (fresh ViewState) between attempts (`withReinit`).
+### ¿Y si no todos los modales tienen la misma estructura?
 
-### OEFA — PrimeFaces 6.0 (the no-VPN alternative)
+Esa fue la duda de fondo, y el parser está hecho para que **no importe**. No
+asume una lista fija de campos: recorre el modal y mete cada par `etiqueta→valor`
+bajo el encabezado de sección que lo precede. Consecuencias:
 
-Here ViewState is an encrypted ~1.5 KB blob, and interactions are **AJAX**:
+- Si un documento **omite** un campo → simplemente no aparece esa llave (no se rompe).
+- Si trae un campo **nuevo** → entra como una llave más en su sección.
+- Si aparece algo **fuera** de las tres secciones conocidas → cae en `extra`.
 
-- **Search.** A PrimeFaces AJAX POST (`javax.faces.source = ...btnBuscar`) with
-  every filter empty. The response is a `<partial-response>` XML whose
-  `<update>` nodes carry HTML fragments inside CDATA — including the paginator
-  (`Página 1 de 176 (1753 registros)`). Each response returns a **new**
-  ViewState that must replace the current one.
-- **Pagination.** Another AJAX POST (`dt_pagination=true`,
-  `dt_first=<row offset>`). The fragment is a bare `<tr>` list with no parent
-  table — spec-compliant HTML parsers drop orphan rows, a real trap, so
-  `parseRows` wraps them first. Direct offset jumps work, making resume cheap.
-- **PDF download.** A full form POST emulating the row link
-  `mojarra.jsfcljs(form, {'form:dt:<n>:j_idt63': …, 'param_uuid': '<uuid>'})`,
-  answered with the PDF bytes. A row is only "clickable" while its page is the
-  one currently rendered; ask for one the view doesn't have and the server
-  silently re-renders the page as HTML instead — which the scraper treats as
-  view loss and recovers from.
+Así, aunque la estructura varíe entre documentos, se captura fielmente lo que
+haya y **no se pierde nada**. Un detalle real que esto resuelve: la etiqueta
+"Tipo de Resolución" aparece tanto en *DATOS DE LA RESOLUCIÓN* como en *DATOS DE
+PROCEDENCIA*; al agrupar por sección, cada una queda en su columna sin pisarse.
 
 ---
 
-## Architecture
+## Cómo funcionan los sitios (el reverse engineering)
+
+El reto pide descubrir la estructura de cada sitio. Los dos son **JSF (Mojarra)**
+sin API REST ni URLs estables: cada interacción es un POST contra una página
+`.xhtml` que carga una cookie `JSESSIONID` y un token `javax.faces.ViewState`.
+Pero corren frameworks distintos encima de JSF, y las mecánicas divergen lo
+suficiente como para ser, en la práctica, dos protocolos. Esta es la parte
+jugosa, así que vale la pena detallarla.
+
+### PJ — RichFaces 4.2.2 (el objetivo principal)
+
+Aquí el ViewState es un identificador corto del lado servidor (`123:456`), no un
+árbol cifrado. El flujo es JSF clásico, **sin AJAX**:
+
+- **Búsqueda.** GET a `inicio.xhtml` para sacar el ViewState y el formulario
+  completo. Luego un **POST del formulario entero** reenviado, más los parámetros
+  del botón de "búsqueda general". El servidor responde `302 → resultado.xhtml`.
+  *Trampa:* el sitio está detrás de un proxy que termina el TLS y devuelve la
+  cabecera `Location` en `http://` después de una petición `https://`; el cliente
+  HTTP vuelve a subir el esquema a `https` (`http-client.ts`), si no el redirect
+  se rompe.
+- **Conteo + paginación.** La página de resultados reporta el total en prosa
+  ("se obtuvieron 208341 resultados") y muestra 10 ítems por página. Paginar es
+  otro POST del formulario completo que mueve el *spinner* de número de página de
+  RichFaces (`formBuscador:spinner`) + su botón "IR" para saltar a cualquier
+  página (1-based).
+- **Metadata del listado.** Cada resultado es un bloque `formBuscador:repeat:N:...`
+  cuyo `onclick` del enlace lleva un objeto JS con ~9 campos (uuid, expediente,
+  recurso, sala, fecha, sumilla…). Leemos la metadata directo de ese objeto en
+  vez de raspar el panel visual — es más robusto, y `N` es el índice absoluto de
+  la fila en todo el corpus. Ese objeto viene **doblemente escapado** en el HTML
+  (entidades `&quot;` *y* `\"`), con los guiones como `-`; `parseResults`
+  colapsa todo eso.
+- **Detalle completo (el modal "Ver Ficha").** Ver [la sección de arriba](#la-ficha-completa-por-secciones).
+  Es un AJAX de RichFaces (`render=@component`) que re-renderiza el popup; el
+  scraper lo dispara por cada fila y parsea la grilla de etiqueta/valor
+  (`fetchDetail` + `parseFicha`). Es una llamada **con estado** (la fila tiene que
+  estar en la vista actual), así que las fichas se traen secuencialmente por
+  página; si el servidor tira un ViewExpired (es inestable), se re-establece la
+  página y se reintenta. Se desactiva con `--skip-details`.
+- **Descarga del PDF.** Un simple `GET /jurisprudenciaweb/ServletDescarga?uuid=<uuid>`
+  entrega el PDF (`Content-Disposition: attachment`). Sin *arming*, sin ViewState.
+- **Inestabilidad.** El servidor de PJ devuelve `500`/`503` intermitentes al
+  navegar. Un reintento con el mismo ViewState no los arregla, así que la
+  búsqueda/paginación **re-inicializan la sesión** (ViewState fresco) entre
+  intentos (`withReinit` en `pj.ts`).
+
+### OEFA — PrimeFaces 6.0 (el alterno sin VPN)
+
+Aquí el ViewState es un blob cifrado de ~1.5 KB, y las interacciones son **AJAX**:
+
+- **Búsqueda.** Un POST AJAX de PrimeFaces (`javax.faces.source = ...btnBuscar`)
+  con todos los filtros vacíos. La respuesta es un XML `<partial-response>` cuyos
+  nodos `<update>` traen fragmentos de HTML dentro de CDATA — incluido el
+  paginador (`Página 1 de 176 (1753 registros)`). Cada respuesta trae un
+  ViewState **nuevo** que reemplaza al actual.
+- **Paginación.** Otro POST AJAX (`dt_pagination=true`, `dt_first=<offset de fila>`).
+  El fragmento es una lista de `<tr>` sueltos, sin tabla padre — los parsers de
+  HTML que cumplen el estándar botan las filas huérfanas, una trampa real, así
+  que `parseRows` las envuelve en una tabla primero. Los saltos por offset
+  funcionan directo, lo que hace barata la reanudación.
+- **Descarga del PDF.** Un POST del formulario que emula el enlace de la fila
+  (`mojarra.jsfcljs(form, {'form:dt:<n>:j_idt63': …, 'param_uuid': '<uuid>'})`),
+  respondido con los bytes del PDF. Una fila solo es "clickeable" mientras su
+  página es la que está renderizada; si pides una que la vista no tiene, el
+  servidor re-renderiza la página como HTML — que el scraper trata como pérdida
+  de vista y recupera.
+
+---
+
+## Arquitectura
 
 ```
 src/
-├── index.ts            # CLI (scrape / retry-failed / report, flag parsing)
-├── scraper.ts          # orchestration: pages → rows → downloads; resume/recovery/concurrency policy
-├── report.ts           # validation report (coverage, identity integrity, PDF checks)
-├── state.ts            # persistent state: completed pages, downloaded uuids, failed list
-├── types.ts            # shared domain types
-├── core/               # site-agnostic machinery
-│   ├── http-client.ts  # axios wrapper: cookies, rate limiter, manual redirects (+http→https upgrade), proxy
-│   ├── jsf-session.ts  # ViewState chaining, <partial-response> parsing, full-page POSTs, resource GETs
-│   ├── retry.ts        # exponential backoff + jitter, Retry-After, 429/5xx classification
-│   ├── concurrency.ts  # bounded-concurrency map (worker pool)
-│   ├── proxy.ts        # optional round-robin proxy pool (off by default)
-│   ├── cookie-jar.ts   # minimal session-cookie jar
-│   ├── files.ts        # safe file names, atomic JSON writes, CSV export
-│   └── logger.ts       # leveled, timestamped logging
+├── index.ts            # CLI (scrape / retry-failed / export / report, parseo de banderas)
+├── scraper.ts          # orquestación: páginas → filas → fichas → descargas; reanudación/recuperación/concurrencia
+├── report.ts           # reporte de validación (cobertura, integridad de identidad, chequeo de PDFs)
+├── state.ts            # capa de estado sobre SQLite: máquina de estados + exports
+├── types.ts            # tipos de dominio compartidos
+├── core/               # maquinaria agnóstica del sitio
+│   ├── db.ts           # SQLite: esquema (documents/pages/runs) y consultas
+│   ├── http-client.ts  # wrapper de axios: cookies, rate limiter, redirects manuales (+upgrade http→https), proxy
+│   ├── jsf-session.ts  # encadenado de ViewState, parseo de <partial-response>, POSTs de página, GETs de recurso
+│   ├── retry.ts        # backoff exponencial + jitter, Retry-After, clasificación 429/5xx
+│   ├── concurrency.ts  # map con concurrencia acotada (pool de workers)
+│   ├── proxy.ts        # pool de proxies round-robin opcional (apagado por defecto)
+│   ├── cookie-jar.ts   # jar mínimo de cookies de sesión
+│   ├── files.ts        # nombres de archivo seguros, escritura atómica de JSON, export a CSV
+│   └── logger.ts       # log con niveles y timestamp
 └── sites/
-    ├── adapter.ts      # SiteAdapter contract
-    ├── oefa.ts         # OEFA (PrimeFaces): AJAX search/pagination, form-POST download
-    ├── pj.ts           # PJ (RichFaces): full-form search/pagination, ficha detail, servlet GET download
-    └── index.ts        # registry
+    ├── adapter.ts      # el contrato SiteAdapter
+    ├── oefa.ts         # OEFA (PrimeFaces): búsqueda/paginación AJAX, descarga por form-POST
+    ├── pj.ts           # PJ (RichFaces): búsqueda/paginación por form completo, ficha, descarga por servlet GET
+    └── index.ts        # registro de adapters
 ```
 
-The core owns everything site-independent — the session + ViewState lifecycle,
-retry/backoff, the pagination loop, resume, and the record-and-continue
-download policy. Each adapter owns only what differs: how to run the search,
-how to page, how a row maps to metadata, and how to fetch its PDF. That the two
-adapters target **different JSF frameworks** (PrimeFaces vs RichFaces) with
-different transports — AJAX partial-responses vs full-page POSTs, a form-POST
-download vs a resource GET — is the real test of that boundary, and it holds:
-neither adapter needed a change to the core's contract beyond the download
-method returning bytes.
+El núcleo se encarga de todo lo que es independiente del sitio: el ciclo de vida
+de sesión + ViewState, el retry/backoff, el bucle de paginación, la reanudación,
+el almacenamiento en SQLite y la política de "registrar y seguir" en las
+descargas. Cada *adapter* se encarga solo de lo que cambia: cómo hacer la
+búsqueda, cómo paginar, cómo se mapea una fila a metadata y cómo bajar su PDF.
 
-### Error handling
+Que los dos adapters apunten a **frameworks JSF distintos** (PrimeFaces vs
+RichFaces) con transportes distintos —respuestas AJAX parciales vs POSTs de
+página completa, descarga por form-POST vs GET de recurso— es la verdadera prueba
+de esa frontera, y aguanta: ninguno de los dos necesitó tocar el contrato del
+núcleo.
 
-Several failure domains, handled separately:
+### Manejo de errores
 
-| Failure | Detection | Response |
+Varios tipos de falla, tratados por separado:
+
+| Falla | Detección | Respuesta |
 | --- | --- | --- |
-| **HTTP 429** | status code | Honors `Retry-After` when sent (RFC 9110 — parsed for 503 too); otherwise exponential backoff `1s → 2s → 4s → 8s → 16s` (±20 % jitter, capped 60 s). After 5 attempts the document is recorded in `state.json` and the scraper moves on. `retry-failed` reprocesses the list. |
-| Transient 5xx / network errors | status / no response | Same backoff policy, on **every** request: navigation (init, search, pagination) is retried inside the JSF session layer, downloads by the orchestrator. |
-| **Flaky-server 500s (PJ)** | status after backoff | RichFaces navigation 500s that a same-ViewState retry can't fix trigger a session re-init (fresh ViewState) and retry — `withReinit` in `pj.ts`. |
-| **Session / view expiry** | partial-response error/redirect, or HTML where a PDF was expected | Re-initialize the session, re-run the search, re-paginate to the current page, retry once. |
-| Interruption (Ctrl+C) | SIGINT | Finishes the in-flight document, persists state, exits. Re-running resumes: completed pages are skipped and already-downloaded uuids are never re-fetched. |
+| **HTTP 429** | código de estado | Respeta `Retry-After` si viene (RFC 9110 — también parseado para 503); si no, backoff exponencial `1s → 2s → 4s → 8s → 16s` (±20 % de jitter, tope 60 s). Tras 5 intentos, el documento queda como `failed` en la DB y el scraper sigue. `retry-failed` lo reprocesa. |
+| 5xx transitorios / errores de red | estado / sin respuesta | Misma política de backoff, en **toda** petición: la navegación (init, búsqueda, paginación) se reintenta en la capa de sesión JSF; las descargas, en el orquestador. |
+| **500s de servidor inestable (PJ)** | estado tras el backoff | Los 500 de navegación de RichFaces que un reintento con el mismo ViewState no arregla disparan una re-inicialización de sesión (ViewState fresco) y reintento — `withReinit` en `pj.ts`. |
+| **Expiración de sesión / vista** | error/redirect en el partial-response, o HTML donde se esperaba un PDF | Re-inicializa la sesión, rehace la búsqueda, re-pagina hasta la página actual, reintenta una vez. |
+| **Página que devuelve 0 filas** | 0 filas con corpus no vacío | Se marca `failed` (no `done`), para que una corrida posterior la re-baje en vez de perder esos documentos. |
+| Interrupción (Ctrl+C) | SIGINT | Termina el documento en curso, guarda el estado, sale. Al re-correr reanuda: salta las páginas `done` y nunca re-baja un uuid ya descargado. |
 
-State writes are atomic (write-to-temp + rename), so a crash can't corrupt the
-resume data. Every payload is validated before being trusted: downloaded files
-must start with `%PDF-`, partial responses must contain the expected nodes.
+Las escrituras de los exports son atómicas (a archivo temporal + rename), y la
+DB commitea cada operación, así que un crash no corrompe la data de reanudación.
+Todo lo que llega se valida antes de confiar en ello: los archivos descargados
+tienen que empezar con `%PDF-`, y los partial-response tienen que traer los nodos
+esperados.
 
-### Politeness, concurrency and proxies
+### Cortesía, concurrencia y proxies
 
-Request **starts** are spaced by a configurable delay (600 ms default) via a
-small rate limiter — so even under concurrency the scraper never bursts. These
-are shared government servers and the challenge explicitly rewards not
-hammering them.
+Los **inicios** de petición se espacian con un delay configurable (600 ms por
+defecto) mediante un rate limiter chiquito, así que incluso con concurrencia el
+scraper nunca ráfaguea. Son servidores públicos compartidos y el reto premia
+explícitamente no martillarlos.
 
-**Concurrency (`--concurrency N`, default 1).** Downloads can run in a bounded
-pool, but only where it's actually safe. The interesting constraint is the
-ViewState: it mutates on every navigation POST, so **pagination can't be
-parallelized within one session** — two concurrent page requests would corrupt
-each other's view. Downloads are different per site, and each adapter declares
-its capability:
+**Concurrencia (`--concurrency N`, default 1).** Las descargas pueden correr en
+un pool acotado, pero solo donde de verdad es seguro. La restricción interesante
+es el ViewState: muta en cada POST de navegación, así que **la paginación no se
+puede paralelizar dentro de una misma sesión** — dos peticiones de página
+concurrentes se corromperían la vista. Las descargas son distintas según el
+sitio, y cada adapter declara su capacidad:
 
-- **PJ** — `ServletDescarga?uuid=` is a stateless GET (just the cookie + uuid),
-  so downloads parallelize safely. The pool skips session recovery here (there
-  is no shared view to lose) and relies on plain retry.
-- **OEFA** — the download is a form POST that needs the row rendered in the
-  current view, so it stays sequential regardless of `--concurrency`.
+- **PJ** — `ServletDescarga?uuid=` es un GET sin estado (solo la cookie + el
+  uuid), así que las descargas paralelizan sin problema.
+- **OEFA** — la descarga es un form-POST que necesita la fila renderizada en la
+  vista actual, así que se queda secuencial pase lo que pase con `--concurrency`.
 
-Honest note on speed: for these targets the PDFs are large (up to ~13 MB) and
-the link (via VPN, for PJ) is bandwidth-bound, so parallel downloads mostly
-split the same pipe — the win is marginal here. Concurrency pays off when the
-bottleneck is latency (many small requests), not bandwidth. It's built,
-correct and off by default; the value is the framework-aware design, not a
-blanket speed claim.
+**Nota honesta sobre velocidad:** para estos objetivos los PDFs son grandes
+(hasta ~13 MB) y el enlace (por VPN, en el caso de PJ) está limitado por ancho de
+banda, así que las descargas en paralelo se reparten el mismo tubo — la ganancia
+acá es marginal. La concurrencia rinde cuando el cuello de botella es la latencia
+(muchas peticiones chiquitas), no el ancho de banda. Está construida, es
+correcta y viene apagada por defecto; el valor es el **diseño consciente del
+framework**, no una promesa de velocidad a ciegas.
 
-**Proxy rotation (`--proxies <file>`, default off).** The targets have no
-IP-based anti-bot, so the scraper goes direct. The capability is wired in
-behind a clean interface (`core/proxy.ts`, round-robin over a list, one proxy
-per request, kept across redirect hops) for the day the same engine is pointed
-at a source that rate-limits by IP — using axios' built-in proxy support, so
-no extra dependency. Enable it with a file of `http://user:pass@host:port`
-lines.
+**Paginación en paralelo (`--page-concurrency N`, default 1).** Como la
+paginación no se puede paralelizar *dentro* de una sesión (el ViewState), la vía
+para paralelizarla es tener **varias sesiones independientes**, cada una con su
+propio ViewState. Con `--page-concurrency N` se levantan N sesiones que sacan
+páginas de una **cola compartida** (el que está libre toma la siguiente), y
+**comparten un solo rate limiter**, así que aunque uses 5 sesiones el ritmo
+global hacia el servidor sigue siendo el mismo (no lo vuelve un martillo). Es la
+versión "en un proceso" del sharding horizontal que describo en
+[En producción](#en-producción-cómo-escalaría-esto). Apagada por defecto: son
+servidores gubernamentales inestables y multiplicar sesiones hay que pedirlo a
+conciencia.
 
-## Adding a site
+**Recomendación de uso (según pruebas reales):**
 
-Implement `SiteAdapter` (`src/sites/adapter.ts`) — `search`, `fetchPage`,
-`downloadPdf`, `pdfFileName` — and register it in `src/sites/index.ts`. The
-core (session, ViewState, retries, resume, orchestration) is reused as-is.
-`oefa.ts` (PrimeFaces/AJAX) and `pj.ts` (RichFaces/full-form) are the two
-reference implementations — pick whichever is closer to your target.
+- **PJ** → `--page-concurrency 1` o `2`. Su servidor es inestable (tira `500`/`503`
+  seguido); con 3+ sesiones se dispara la carga de navegación y el servidor
+  buckea más — el scraper se recupera de todos los 500 (0 documentos perdidos),
+  pero la corrida se vuelve más lenta y ruidosa. La ganancia real en PJ viene de
+  **`--concurrency 10`** (descargas en paralelo, GETs sin estado), no de paginar
+  en paralelo.
+- **OEFA / un servidor estable** → puedes subir `--page-concurrency` (3–5) sin
+  problema; ahí sí rinde.
+- Regla simple: **paralelizar descargas (`--concurrency`) casi siempre ayuda;
+  paralelizar páginas (`--page-concurrency`) solo si el servidor lo aguanta.**
+
+**Rotación de proxies (`--proxies <file>`, apagado por defecto).** Estos
+objetivos no tienen anti-bot por IP, así que el scraper va directo. La capacidad
+está cableada detrás de una interfaz limpia (`core/proxy.ts`, round-robin sobre
+una lista, un proxy por petición, sostenido a través de los redirects) para el
+día en que el mismo motor apunte a un sitio que sí limita por IP — usando el
+soporte de proxy nativo de axios, sin dependencia extra. Se activa con un archivo
+de líneas `http://user:pass@host:port`.
+
+### Validación (sanity check antes de entregar)
+
+Cada scrape termina con un reporte de validación — y `report` lo regenera contra
+una corrida existente. Es el paso de "revisar que la data tiene sentido antes de
+entregarla" que pide el reto, y chequea:
+
+- **Cobertura** — documentos extraídos vs el total del corpus, páginas completadas.
+- **Integridad de identidad** — los campos que deben existir en todo documento
+  (p. ej. `recurso` + `nroexp` en PJ) se alertan si bajan del 100 % — una señal
+  rápida de una regresión de parseo. Los campos genuinamente opcionales (una
+  sumilla, una lista de palabras) se muestran pero nunca se alertan, para que el
+  reporte no llore lobo.
+- **Duplicados** — uuids repetidos entre los documentos extraídos.
+- **Integridad de PDFs** — se confirma que **todos** los documentos marcados como
+  descargados tienen su archivo en disco, y una muestra se chequea además por la
+  cabecera `%PDF-` y un tamaño no trivial.
+- **Fallidos** — cuántas descargas quedan en la lista de reintentos.
+
+Y al terminar cada corrida se imprime un bloque de resumen con los números de la
+tabla `runs`:
+
+```text
+════════════ Run summary ════════════
+  Pages completed:  176/176
+  Documents:        1753
+  PDFs:  OK 1751  ·  failed 2  ·  pending 0
+  Status:           completed
+══════════════════════════════════════
+```
+
+```text
+Validation report — pj
+  Corpus total:        208331
+  Documents extracted: 20 (0% of corpus)
+  Pages completed:     2
+  Unique uuids:        20
+  PDFs downloaded:     20 (sample valid: 20/20)
+  PDFs failed:         0
+  Metadata coverage:
+    normaDI              5%  (1/20)
+    sumilla             30%  (6/20)
+    palabras            35%  (7/20)
+   *recurso            100%  (20/20)
+   *nroexp             100%  (20/20)
+    pretensiones       100%  (20/20)
+    ...
+    (* = campo de identidad, debe ser 100%)
+  ✓ No consistency issues found.
+```
+
+Una corrida real de PJ con `--concurrency 20` (20 páginas → 200 PDFs): el bloque
+de resumen y el reporte de validación al final, con `PDFs missing/disk: 0` y sin
+inconsistencias:
+
+![Corrida de PJ con el resumen y el reporte de validación](docs/img/terminal-run.png)
+
+---
+
+## Docker
+
+Para que corra **idéntico en cualquier máquina** (misma versión de Node, mismas
+dependencias, sin "en mi PC sí funciona") hay un `Dockerfile` multi-stage: una
+etapa compila el TypeScript y otra deja solo las dependencias de runtime + el
+`dist/`.
+
+```bash
+# Construir la imagen
+docker build -t scraper-jurisprudencia .
+
+# OEFA (sin VPN), guardando la salida en ./output del host
+docker run --rm -v "$(pwd)/output:/data" scraper-jurisprudencia \
+  scrape --site oefa --out /data
+
+# Cualquier otro comando (report, export, retry-failed…)
+docker run --rm -v "$(pwd)/output:/data" scraper-jurisprudencia report --out /data
+```
+
+**Ojo con PJ:** el contenedor resuelve la portabilidad, **no** el geo-bloqueo.
+Para `--site pj` sigues necesitando salir por Perú: la red del host con VPN de
+Perú (`--network host` en Linux) o pasarle proxies peruanos con `--proxies`.
+OEFA no necesita nada de eso.
+
+## En producción: cómo escalaría esto
+
+Tal como está, el scraper corre en una máquina y guarda todo local (SQLite + PDFs
+en disco). Es lo correcto para el reto. Si esto alimentara una base de
+jurisprudencia de verdad —refrescada a diario, con millones de documentos— así lo
+llevaría a producción.
+
+### 1. Conectarlo al pipeline existente (buckets + DB central)
+
+Hoy la fuente de verdad es `documents.db` y los PDFs viven en `output/pdfs/`. En
+prod eso pasa a infraestructura compartida:
+
+- **PDFs → object storage** (GCS / S3). En vez de escribir a disco, cada PDF se
+  sube a un bucket (`gs://jurisprudencia-pe/pj/<uuid>.pdf`) y en la DB se guarda
+  la ruta del objeto, no el nombre de archivo local.
+- **Metadata → una DB gestionada** (Postgres, o BigQuery si el consumo es
+  analítico). La SQLite se vuelve un Postgres central: la misma forma de tablas
+  (`documents` / `pages` / `runs`), pero compartida por todos los workers.
+
+Lo bueno es que **el scraper casi no cambia**: `state.ts` es la única capa que
+toca el almacenamiento. Pasar de SQLite → Postgres y de disco → bucket es
+reescribir esa capa (otra implementación de `Db` + un *uploader* de PDFs), no la
+lógica de scraping. Ese es justamente el motivo de tener el almacenamiento
+aislado detrás de `state.ts`.
+
+### 2. Proxies rotativos peruanos
+
+PJ está **geo-bloqueado a Perú**, así que en prod no dependería de una VPN manual
+sino de un pool de **exit nodes peruanos**. El dato clave de este portal: en el
+recon **no vi anti-bot por IP** (ni Akamai, ni PerimeterX, ni rate-limit por IP),
+solo el geo-bloqueo. Eso cambia mucho el cálculo de costo:
+
+| Tipo de proxy | Velocidad | Costo aprox. | ¿Sirve para PJ? |
+|---|---|---|---|
+| **Datacenter PE** | Rápido | ~US$0.5–2 / IP-mes | ✅ **Sí** — solo hay que estar geo-en-Perú; sin anti-bot no toca "parecer humano". |
+| **Residencial PE** | Lento | ~US$5–15 / GB | Overkill aquí — se justificaría solo si el portal empezara a bloquear datacenter. |
+| **Móvil PE** | Muy lento | ~US$20–50 / GB | Innecesario para este caso. |
+
+O sea: para PJ bastan **proxies datacenter peruanos** (baratos y rápidos), porque
+el único requisito es la geo. La arquitectura ya está lista (`--proxies`,
+`core/proxy.ts`: round-robin, un proxy por request, sostenido entre redirects);
+en prod solo se puebla la lista con los exit nodes PE, y si algún día apareciera
+un límite por IP, la rotación diluye el rate repartiendo las peticiones entre
+muchas IPs.
+
+### 3. Volverlo un servicio en la nube (Cloud Run)
+
+Empaquetado en un contenedor, corre como **Cloud Run Job** (batch) disparado por
+**Cloud Scheduler** para el refresco diario. El truco de escala es el **sharding**:
+
+- Las 20.835 páginas de PJ se reparten en rangos y se lanzan N tareas en paralelo
+  (Cloud Run Jobs con `--tasks N`), cada una tomando su rango.
+- Cada tarea tiene su **propia sesión JSF** (su propio ViewState), así que la
+  restricción de "no paralelizar la paginación dentro de una sesión" no aplica
+  *entre* workers — cada uno pagina lo suyo.
+- Todos escriben al **Postgres central**, y la máquina de estados coordina: un
+  worker toma páginas `pending`, las marca `in_progress`, y si se muere, otro las
+  retoma (el `SELECT ... WHERE status != 'done'` ya está pensado para eso).
+
+### 4. Más concurrencia (horizontal, no solo vertical)
+
+Hoy la concurrencia está topada por el ancho de banda de una sola VPN. En cloud,
+con IP peruana nativa y varios workers, se escala **horizontalmente**: en vez de
+10 descargas concurrentes en 1 proceso, 50 tareas × 10 = 500 descargas en
+paralelo, cada una con su sesión y su propio tubo de red. El rate-limiter
+por-worker sigue evitando martillar al servidor desde una misma IP.
+
+### 5. Logs y observabilidad
+
+- **Logs estructurados en JSON** (en vez de texto) → Cloud Logging, filtrables por
+  `run_id`, `uuid` o página.
+- **Métricas**: páginas/min, PDFs/min, tasa de 429, fallidos, latencia por
+  request → Prometheus / Cloud Monitoring, con **alertas** (p. ej. "429 > 5 % en
+  5 min", o "0 páginas nuevas en 10 min" = algo se rompió).
+- La **trazabilidad por documento ya existe**: cada fila guarda `attempts` y
+  `last_error`, así que sabes exactamente por qué falló cada PDF.
+
+## Agregar un sitio nuevo
+
+Implementa el contrato `SiteAdapter` (`src/sites/adapter.ts`) — `search`,
+`fetchPage`, `downloadPdf`, `pdfFileName` (y opcionalmente `fetchDetail`) — y
+regístralo en `src/sites/index.ts`. El núcleo (sesión, ViewState, reintentos,
+reanudación, SQLite, orquestación) se reutiliza tal cual. `oefa.ts`
+(PrimeFaces/AJAX) y `pj.ts` (RichFaces/form completo) son las dos
+implementaciones de referencia — arranca de la que se parezca más a tu objetivo.
 
 ## Tests
 
@@ -286,27 +690,30 @@ reference implementations — pick whichever is closer to your target.
 npm test
 ```
 
-31 unit tests (Node's built-in runner, no extra dependencies) cover the pure
-logic against fixtures captured from **both** live sites:
+35 tests unitarios (con el runner incorporado de Node, sin dependencias extra)
+cubren la lógica pura contra *fixtures* capturados de **ambos** sitios en vivo:
 
-- **OEFA:** partial-response parsing (including JSF's split-CDATA escaping of
-  literal `]]>`), row extraction from both fragment shapes.
-- **PJ:** metadata + uuid extraction from the doubly-escaped RichFaces download
-  link (including a value that itself contains quotes — a real trap), the
-  absolute `repeat:N` row index, form-field harvesting, picking the
-  general-search button over the specialized one, and parsing the ~40-field
-  "Ver Ficha" detail modal (accented labels slugged, blank values preserved,
-  repeated labels not clobbered).
-- **Shared:** 429/backoff/Retry-After semantics (incl. 503), retry exhaustion
-  with accurate attempt counts, cookie handling, CSV escaping, Content-Disposition
-  and file-name sanitization, the bounded-concurrency pool, and proxy parsing.
+- **OEFA:** parseo de partial-response (incluido el escape de CDATA partido de
+  JSF para el `]]>` literal), extracción de filas de las dos formas de fragmento.
+- **PJ:** extracción de metadata + uuid del enlace de descarga doblemente
+  escapado de RichFaces (incluido un valor que contiene comillas — una trampa
+  real), el índice de fila absoluto `repeat:N`, cosecha de campos del formulario,
+  elegir el botón de búsqueda general sobre el especializado, y el parseo del
+  modal "Ver Ficha" agrupado en sus **tres secciones** (etiquetas con acentos
+  convertidas a slug, valores vacíos preservados, etiquetas repetidas dentro y
+  entre secciones que no se pisan).
+- **Almacenamiento (SQLite):** la máquina de estados y la reanudación (el estado
+  persiste al reabrir la DB), el registro de fallidos, que un re-scrape nunca
+  pierda una descarga ya hecha, el export a JSON/CSV en UTF-8 con las columnas de
+  secciones, y que se niegue a mezclar dos sitios en una misma carpeta.
+- **Compartido:** semántica de 429/backoff/Retry-After (incl. 503), agotamiento
+  de reintentos con conteo exacto de intentos, manejo de cookies, escape de CSV,
+  Content-Disposition y saneo de nombres de archivo, el pool de concurrencia
+  acotada, y el parseo de proxies.
 
-## Requirements
-
-- Node.js ≥ 18
-- Dependencies: `axios`, `cheerio` (runtime); `typescript`, `ts-node` (dev)
+## Compilar
 
 ```bash
-npm run build   # compile to dist/
-npm start       # run the compiled CLI
+npm run build   # compila a dist/
+npm start       # corre el CLI compilado
 ```

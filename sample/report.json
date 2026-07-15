@@ -1,0 +1,76 @@
+{
+  "site": "pj",
+  "generatedAt": "2026-07-15T00:38:41.489Z",
+  "corpusTotal": 208332,
+  "documentsExtracted": 200,
+  "pagesCompleted": 20,
+  "uniqueUuids": 200,
+  "duplicateUuids": 0,
+  "pdfsDownloaded": 200,
+  "pdfsFailed": 0,
+  "pdfsMissingOnDisk": 0,
+  "pdfSampleChecked": 25,
+  "pdfSampleValid": 25,
+  "metadataCoverage": [
+    {
+      "field": "normaDI",
+      "present": 20,
+      "total": 200,
+      "pct": 10
+    },
+    {
+      "field": "palabras",
+      "present": 89,
+      "total": 200,
+      "pct": 45
+    },
+    {
+      "field": "sumilla",
+      "present": 90,
+      "total": 200,
+      "pct": 45
+    },
+    {
+      "field": "recurso",
+      "present": 200,
+      "total": 200,
+      "pct": 100
+    },
+    {
+      "field": "nroexp",
+      "present": 200,
+      "total": 200,
+      "pct": 100
+    },
+    {
+      "field": "pretensiones",
+      "present": 200,
+      "total": 200,
+      "pct": 100
+    },
+    {
+      "field": "tipoResolucion",
+      "present": 200,
+      "total": 200,
+      "pct": 100
+    },
+    {
+      "field": "fechaResolucion",
+      "present": 200,
+      "total": 200,
+      "pct": 100
+    },
+    {
+      "field": "sala",
+      "present": 200,
+      "total": 200,
+      "pct": 100
+    }
+  ],
+  "requiredFields": [
+    "recurso",
+    "nroexp"
+  ],
+  "warnings": [],
+  "ok": true
+}
