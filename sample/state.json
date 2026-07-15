@@ -231,8 +231,8 @@
       "runId": 1,
       "site": "pj",
       "command": "scrape",
-      "startedAt": "2026-07-15T00:29:24.736Z",
-      "finishedAt": "2026-07-15T00:38:41.442Z",
+      "startedAt": "2026-07-15T01:18:29.590Z",
+      "finishedAt": "2026-07-15T01:26:23.098Z",
       "status": "completed",
       "corpusTotal": 208332,
       "pagesDone": 20,
@@ -242,5 +242,5 @@
       "pending": 208132
     }
   ],
-  "updatedAt": "2026-07-15T00:38:41.481Z"
+  "updatedAt": "2026-07-15T01:26:23.128Z"
 }
