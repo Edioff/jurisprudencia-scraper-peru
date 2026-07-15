@@ -1,28 +1,37 @@
 {
   "name": "scraper-challenge",
   "version": "1.0.0",
-  "description": "TypeScript scraper for Peruvian government document repositories built on JSF/PrimeFaces — pure HTTP (axios + cheerio), no browser automation",
+  "description": "TypeScript scraper for Peruvian government document repositories (JSF/PrimeFaces + RichFaces) — pure HTTP (axios + cheerio), no browser automation, SQLite-backed resume",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "scrape": "ts-node src/index.ts scrape",
     "retry-failed": "ts-node src/index.ts retry-failed",
+    "export": "ts-node src/index.ts export",
     "start": "node dist/index.js scrape",
     "test": "node --require ts-node/register --test tests/unit.test.ts",
-    "report": "ts-node src/index.ts report"
+    "report": "ts-node src/index.ts report",
+    "verify": "ts-node src/index.ts verify"
   },
   "keywords": [
     "scraper",
     "typescript",
     "jsf",
-    "primefaces"
+    "primefaces",
+    "richfaces",
+    "sqlite"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "axios": "^1.7.9",
+    "better-sqlite3": "^11.10.0",
     "cheerio": "^1.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.0"

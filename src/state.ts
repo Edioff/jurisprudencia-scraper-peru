@@ -1,143 +1,294 @@
 /**
- * Persistent run state: which pages are done, which PDFs are downloaded,
- * which downloads failed and why.
+ * Persistent run state, backed by SQLite (see `core/db.ts`).
  *
- * Enables the two operational requirements of the challenge:
- *  - long runs can be interrupted and resumed without redoing work
+ * This is the operational layer the orchestrator talks to. It owns the item
+ * state machines (a page and a document each move
+ * `pending → in_progress → done | failed`) and the resume/retry queries built
+ * on them, and it derives the human-facing exports (`documents.json`,
+ * `documents.csv`, `state.json`) from the database on demand.
+ *
+ * It satisfies the two operational requirements of the challenge:
+ *  - long runs can be interrupted and resumed without redoing completed work
  *  - failed downloads (e.g. persistent 429s) are recorded for `retry-failed`
  */
 
-import * as path from 'path';
-import { readJsonIfExists, toCsv, writeJsonAtomic, ensureDir } from './core/files';
-import { DocumentRecord, FailedDownload, ScrapeState } from './types';
 import * as fs from 'fs';
+import * as path from 'path';
+import { toCsv, writeJsonAtomic } from './core/files';
+import { Db, RunStatus } from './core/db';
+import { DocumentRecord, FailedDownload, FichaDetail } from './types';
+
+const DB_FILE = 'documents.db';
+
+/** A snapshot of a run's progress. */
+export interface RunStats {
+  corpusTotal: number;
+  pagesCompleted: number;
+  docsExtracted: number;
+  pdfsDone: number;
+  pdfsFailed: number;
+  /** PDFs still to download (corpusTotal - pdfsDone). */
+  pending: number;
+}
+
+/** CSV column prefix for each ficha section, keeping same-named fields
+ *  (e.g. "Tipo de Resolución" appears in two sections) from colliding. */
+const SECTION_PREFIX: Record<keyof FichaDetail, string> = {
+  resolucion: 'res',
+  proceso: 'proc',
+  procedencia: 'proce',
+  extra: 'extra',
+};
 
 export class StateStore {
-  private state: ScrapeState;
-  private documents = new Map<string, DocumentRecord>();
+  private readonly db: Db;
+  private readonly hasDetail: boolean;
+  private readonly site: string;
+  private currentRunId: number | null = null;
 
-  readonly stateFile: string;
-  readonly documentsFile: string;
-  readonly csvFile: string;
+  readonly outDir: string;
   readonly pdfDir: string;
 
-  constructor(outDir: string, site: string) {
-    this.stateFile = path.join(outDir, 'state.json');
-    this.documentsFile = path.join(outDir, 'documents.json');
-    this.csvFile = path.join(outDir, 'documents.csv');
+  constructor(outDir: string, site: string, opts: { hasDetail?: boolean } = {}) {
+    this.outDir = outDir;
     this.pdfDir = path.join(outDir, 'pdfs');
-    ensureDir(this.pdfDir);
+    fs.mkdirSync(this.pdfDir, { recursive: true });
+    this.hasDetail = opts.hasDetail ?? false;
+    this.site = site;
 
-    const prior = readJsonIfExists<ScrapeState>(this.stateFile);
-    this.state =
-      prior && prior.site === site
-        ? prior
-        : {
-            site,
-            totalRecords: null,
-            completedPages: [],
-            downloaded: {},
-            failed: [],
-            updatedAt: new Date().toISOString(),
-          };
-
-    const priorDocs = readJsonIfExists<DocumentRecord[]>(this.documentsFile);
-    if (prior && prior.site === site && priorDocs) {
-      for (const doc of priorDocs) this.documents.set(docKey(doc), doc);
+    this.db = new Db(path.join(outDir, DB_FILE));
+    // A database is tied to one site — refuse to mix another site's data into
+    // the same output directory (which would corrupt the corpus counts).
+    const existing = this.db.latestSite();
+    if (existing && existing !== site) {
+      this.db.close();
+      throw new Error(
+        `Output dir ${outDir} already holds data for site "${existing}"; ` +
+          `use a separate --out directory for "${site}".`,
+      );
     }
   }
 
-  get totalRecords(): number | null {
-    return this.state.totalRecords;
+  // --- run history ----------------------------------------------------------
+
+  /** Open a new run (a `scrape` or `retry-failed` execution). */
+  startRun(command: string): void {
+    // Re-check the site guard at run time: the constructor's check passes when
+    // the DB has no runs yet, so re-checking here narrows the window in which
+    // two invocations could mix different sites into one output directory.
+    const existing = this.db.latestSite();
+    if (existing && existing !== this.site) {
+      throw new Error(
+        `Output dir ${this.outDir} already holds data for site "${existing}"; ` +
+          `use a separate --out directory for "${this.site}".`,
+      );
+    }
+    this.currentRunId = this.db.startRun(this.site, command, new Date().toISOString());
   }
 
-  set totalRecords(total: number | null) {
-    this.state.totalRecords = total;
-  }
-
-  isPageCompleted(page: number): boolean {
-    return this.state.completedPages.includes(page);
-  }
-
-  markPageCompleted(page: number): void {
-    if (!this.isPageCompleted(page)) this.state.completedPages.push(page);
-  }
-
-  isDownloaded(uuid: string | null): boolean {
-    return uuid !== null && uuid in this.state.downloaded;
-  }
-
-  recordDownload(doc: DocumentRecord, pdfFile: string): void {
-    if (doc.uuid) this.state.downloaded[doc.uuid] = pdfFile;
-    doc.pdfFile = pdfFile;
-    this.documents.set(docKey(doc), doc);
-    // A previously failed download that now succeeded leaves the failed list.
-    this.state.failed = this.state.failed.filter((f) => f.uuid !== doc.uuid);
-  }
-
-  recordFailure(doc: DocumentRecord, attempts: number, lastError: string): void {
-    this.state.failed = this.state.failed.filter((f) => f.uuid !== doc.uuid);
-    this.state.failed.push({
-      uuid: doc.uuid,
-      rowIndex: doc.rowIndex,
-      page: doc.page,
-      fields: doc.fields,
-      attempts,
-      lastError,
-      failedAt: new Date().toISOString(),
+  /** Close the current run, folding in the final counts. */
+  finishRun(status: RunStatus): void {
+    if (this.currentRunId === null) return;
+    const s = this.stats();
+    this.db.finishRun(this.currentRunId, new Date().toISOString(), {
+      status,
+      pagesDone: s.pagesCompleted,
+      docsExtracted: s.docsExtracted,
+      pdfsDone: s.pdfsDone,
+      pdfsFailed: s.pdfsFailed,
+      pending: s.pending,
     });
   }
 
-  get failed(): FailedDownload[] {
-    return [...this.state.failed];
+  /** A live snapshot of the run's progress, for the end-of-run summary and
+   *  the run record. `pending` is how many PDFs are still to download. */
+  stats(): RunStats {
+    const corpusTotal = this.totalRecords ?? 0;
+    const pdfsDone = this.db.downloadedCount();
+    return {
+      corpusTotal,
+      pagesCompleted: this.db.completedPages().length,
+      docsExtracted: this.db.documentCount(),
+      pdfsDone,
+      pdfsFailed: this.db.failedDocs().length,
+      pending: Math.max(0, corpusTotal - pdfsDone),
+    };
   }
 
-  get downloadedCount(): number {
-    return Object.keys(this.state.downloaded).length;
+  get totalRecords(): number | null {
+    return this.db.latestCorpusTotal();
   }
 
-  addDocuments(docs: DocumentRecord[]): void {
-    for (const doc of docs) {
-      const key = docKey(doc);
-      const existing = this.documents.get(key);
-      // Never lose an already-recorded pdfFile on re-scrape of the same page.
-      if (existing?.pdfFile && !doc.pdfFile) doc.pdfFile = existing.pdfFile;
-      this.documents.set(key, doc);
+  set totalRecords(total: number | null) {
+    if (total !== null && this.currentRunId !== null) {
+      this.db.setRunCorpusTotal(this.currentRunId, total);
     }
   }
 
-  get documentCount(): number {
-    return this.documents.size;
+  // --- page state machine ---------------------------------------------------
+
+  isPageCompleted(page: number): boolean {
+    return this.db.getPageStatus(page) === 'done';
   }
 
-  /** Flush state + extracted data to disk (called after every page). */
-  save(): void {
-    this.state.updatedAt = new Date().toISOString();
-    writeJsonAtomic(this.stateFile, this.state);
+  /** Mark a page as being worked on (bumps its attempt count). */
+  startPage(page: number): void {
+    this.db.setPageStatus(page, 'in_progress', { incAttempt: true });
+  }
 
-    const docs = [...this.documents.values()].sort((a, b) => a.rowIndex - b.rowIndex);
-    writeJsonAtomic(this.documentsFile, docs);
+  markPageCompleted(page: number, rowCount?: number): void {
+    this.db.setPageStatus(page, 'done', { rowCount });
+  }
+
+  markPageFailed(page: number, error: string): void {
+    this.db.setPageStatus(page, 'failed', { error });
+  }
+
+  // --- document metadata + ficha --------------------------------------------
+
+  /** Upsert each row's list metadata; persist any already-attached ficha. */
+  addDocuments(docs: DocumentRecord[]): void {
+    this.db.tx(() => {
+      for (const doc of docs) {
+        const key = docKey(doc);
+        this.db.upsertDocument(doc, key, this.hasDetail);
+        if (doc.detail) this.db.setDetail(key, doc.detail, 'done');
+      }
+    });
+  }
+
+  /** Store a document's fetched ficha detail (sections) as done. */
+  setFichaDetail(doc: DocumentRecord, detail: FichaDetail): void {
+    doc.detail = detail;
+    this.db.setDetail(docKey(doc), detail, 'done');
+  }
+
+  /** Record that a document's ficha fetch failed (metadata is still kept). */
+  markFichaFailed(doc: DocumentRecord, error: string): void {
+    this.db.setFichaStatus(docKey(doc), 'failed', error);
+  }
+
+  // --- download state machine -----------------------------------------------
+
+  isDownloaded(uuid: string | null): boolean {
+    return uuid !== null && this.db.isDownloadedUuid(uuid);
+  }
+
+  /** Mark a document's PDF download as in progress. */
+  startDownload(doc: DocumentRecord): void {
+    this.db.setPdfStatus(docKey(doc), 'in_progress');
+  }
+
+  recordDownload(doc: DocumentRecord, pdfFile: string): void {
+    doc.pdfFile = pdfFile;
+    this.db.setPdfDone(docKey(doc), pdfFile);
+  }
+
+  recordFailure(doc: DocumentRecord, attempts: number, lastError: string): void {
+    this.db.setPdfStatus(docKey(doc), 'failed', { attempts, error: lastError });
+  }
+
+  get failed(): FailedDownload[] {
+    return this.db.failedDocs();
+  }
+
+  get downloadedCount(): number {
+    return this.db.downloadedCount();
+  }
+
+  get documentCount(): number {
+    return this.db.documentCount();
+  }
+
+  // --- persistence ----------------------------------------------------------
+
+  /** Lightweight durability checkpoint, called after each page. Writes are
+   *  already committed per statement; this just bounds WAL growth. */
+  save(): void {
+    this.db.checkpoint();
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  /**
+   * Derive the human-facing artifacts from the database:
+   *  - documents.json : full records (list metadata + ficha sections)
+   *  - documents.csv  : the same, flattened to columns
+   *  - state.json     : resume/retry summary (pages, downloads, failures)
+   */
+  exportArtifacts(): { documents: number } {
+    const docs = this.db.allDocuments();
+
+    writeJsonAtomic(path.join(this.outDir, 'documents.json'), docs);
 
     if (docs.length > 0) {
-      const fieldNames = Object.keys(docs[0].fields);
-      const headers = [...fieldNames, 'uuid', 'pdfFile'];
-      const rows = docs.map((d) => ({
-        ...d.fields,
-        uuid: d.uuid ?? '',
-        pdfFile: d.pdfFile ?? '',
-      }));
-      fs.writeFileSync(this.csvFile, toCsv(headers, rows), 'utf-8');
+      const flat = docs.map(flattenForCsv);
+      const headers = unionKeys(flat);
+      fs.writeFileSync(path.join(this.outDir, 'documents.csv'), toCsv(headers, flat), 'utf-8');
+    }
+
+    const state = {
+      site: this.db.latestSite() ?? this.site,
+      totalRecords: this.totalRecords,
+      completedPages: this.db.completedPages(),
+      downloaded: this.db.downloadedMap(),
+      failed: this.db.failedDocs(),
+      runs: this.db.allRuns(), // full execution history: when, outcome, counts
+      updatedAt: new Date().toISOString(),
+    };
+    writeJsonAtomic(path.join(this.outDir, 'state.json'), state);
+
+    return { documents: docs.length };
+  }
+
+  /** The site an output directory was scraped for, or null if none yet. */
+  static siteOf(outDir: string): string | null {
+    const dbFile = path.join(outDir, DB_FILE);
+    if (!fs.existsSync(dbFile)) return null;
+    const db = new Db(dbFile);
+    try {
+      return db.latestSite();
+    } finally {
+      db.close();
     }
   }
 }
 
+/** Flatten a document to a single CSV row: list fields + prefixed ficha
+ *  sections + identity/columns for the PDF. */
+function flattenForCsv(doc: DocumentRecord): Record<string, string> {
+  const out: Record<string, string> = { ...doc.fields };
+  if (doc.detail) {
+    for (const section of Object.keys(SECTION_PREFIX) as Array<keyof FichaDetail>) {
+      const prefix = SECTION_PREFIX[section];
+      for (const [k, v] of Object.entries(doc.detail[section])) out[`${prefix}:${k}`] = v;
+    }
+  }
+  out.uuid = doc.uuid ?? '';
+  out.pdfFile = doc.pdfFile ?? '';
+  return out;
+}
+
+/** Ordered union of all keys across rows (uuid + pdfFile pushed to the end). */
+function unionKeys(rows: Array<Record<string, string>>): string[] {
+  const keys = new Set<string>();
+  for (const row of rows) for (const k of Object.keys(row)) keys.add(k);
+  keys.delete('uuid');
+  keys.delete('pdfFile');
+  return [...keys, 'uuid', 'pdfFile'];
+}
+
 /**
- * Rows without a uuid still get an identity for deduplication. Row indexes
- * alone can shift if the result set changes between runs, so the key also
- * carries the row's identifying field.
+ * A stable primary key for a document. uuid when present; otherwise a synthetic
+ * key from a stable identifying field (so uuid-less rows still dedupe across
+ * runs). rowIndex is deliberately NOT used when an identifier exists: it is
+ * positional and shifts when the corpus gains/loses rows, which would orphan a
+ * document's prior state. It is only the last-resort fallback.
  */
 function docKey(doc: DocumentRecord): string {
   if (doc.uuid) return doc.uuid;
-  const id = doc.fields.numeroExpediente ?? Object.values(doc.fields)[1] ?? '';
-  return `row-${doc.rowIndex}-${id}`;
+  const id = doc.fields.numeroExpediente ?? doc.fields.nroexp ?? Object.values(doc.fields)[1] ?? '';
+  return id ? `id-${id}` : `row-${doc.rowIndex}`;
 }

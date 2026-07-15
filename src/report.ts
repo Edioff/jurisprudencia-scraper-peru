@@ -32,6 +32,8 @@ export interface ValidationReport {
   duplicateUuids: number;
   pdfsDownloaded: number;
   pdfsFailed: number;
+  /** Downloads recorded as done whose file is absent on disk (should be 0). */
+  pdfsMissingOnDisk: number;
   pdfSampleChecked: number;
   pdfSampleValid: number;
   metadataCoverage: FieldCoverage[];
@@ -71,9 +73,16 @@ export function buildReport(
     })
     .sort((a, b) => a.pct - b.pct);
 
-  // --- PDF integrity on a sample of what we downloaded ---
+  // --- PDF integrity: existence for all, header/size on a sample ---
   const pdfDir = path.join(outDir, 'pdfs');
   const downloaded = Object.values(state.downloaded);
+  // Every download marked done must have its file on disk — cheap to check
+  // for the whole set, and the strongest signal that the run is intact.
+  const pdfsMissingOnDisk = downloaded.filter(
+    (file) => !fs.existsSync(path.join(pdfDir, file)),
+  ).length;
+  // Reading every file's bytes is expensive at scale, so the %PDF header +
+  // size check runs on a sample.
   const sample = downloaded.slice(0, PDF_SAMPLE_SIZE);
   let pdfSampleValid = 0;
   for (const file of sample) {
@@ -97,6 +106,9 @@ export function buildReport(
   if (state.failed.length > 0) {
     warnings.push(`${state.failed.length} download(s) failed — run \`retry-failed\` to reprocess`);
   }
+  if (pdfsMissingOnDisk > 0) {
+    warnings.push(`${pdfsMissingOnDisk} PDF(s) recorded as downloaded but missing on disk`);
+  }
   if (sample.length > 0 && pdfSampleValid < sample.length) {
     warnings.push(`${sample.length - pdfSampleValid}/${sample.length} sampled PDFs are missing or not valid PDF files`);
   }
@@ -114,6 +126,7 @@ export function buildReport(
     duplicateUuids: uuids.length - uniqueUuids,
     pdfsDownloaded: downloaded.length,
     pdfsFailed: state.failed.length,
+    pdfsMissingOnDisk,
     pdfSampleChecked: sample.length,
     pdfSampleValid,
     metadataCoverage,
@@ -139,6 +152,7 @@ export function writeAndPrintReport(outDir: string, report: ValidationReport): v
   log.info(`  Pages completed:     ${report.pagesCompleted}`);
   log.info(`  Unique uuids:        ${report.uniqueUuids}${report.duplicateUuids ? ` (${report.duplicateUuids} duplicates!)` : ''}`);
   log.info(`  PDFs downloaded:     ${report.pdfsDownloaded} (sample valid: ${report.pdfSampleValid}/${report.pdfSampleChecked})`);
+  log.info(`  PDFs missing/disk:   ${report.pdfsMissingOnDisk}`);
   log.info(`  PDFs failed:         ${report.pdfsFailed}`);
   log.info(`  Metadata coverage:`);
   for (const c of report.metadataCoverage) {
